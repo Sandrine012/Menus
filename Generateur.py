@@ -24,7 +24,7 @@ FICHIER_SORTIE_LISTES_TXT = "Listes_ingredients.txt"
 # notion_database_id = "votre_database_id"
 try:
     NOTION_API_KEY = st.secrets["notion_api_key"]
-    DATABASE_ID = st.secrets["notion_database_id"] # ID de votre base de données "Planning Menus"
+    DATABASE_ID = st.secrets["notion_database_id_menus"] # ID de votre base de données "Planning Menus"
     notion = Client(auth=NOTION_API_KEY)
 except KeyError:
     st.error("Les secrets Notion (notion_api_key ou notion_database_id) ne sont pas configurés. "
