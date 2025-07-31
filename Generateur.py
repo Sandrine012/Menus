@@ -566,7 +566,8 @@ st.subheader("Charger le fichier Planning.csv :")
 uploaded_planning_file = st.file_uploader("Choisissez votre fichier Planning.csv", type="csv", key="planning_uploader")
 if uploaded_planning_file is not None:
     try:
-        df_planning = pd.read_csv(uploaded_planning_file, sep=',', encoding='utf-8')
+        # CHANGEMENT ICI : sep=';' au lieu de sep=','
+        df_planning = pd.read_csv(uploaded_planning_file, sep=';', encoding='utf-8') 
         verifier_colonnes(df_planning, [COLONNE_DATE_PLANNING, COLONNE_PARTICIPANTS_PLANNING], "Planning.csv")
         # Conversion des dates
         df_planning[COLONNE_DATE_PLANNING] = pd.to_datetime(df_planning[COLONNE_DATE_PLANNING], format="%d/%m/%Y %H:%M", errors='coerce')
@@ -576,7 +577,7 @@ if uploaded_planning_file is not None:
         st.write(f"Aperçu de Planning.csv ({len(df_planning)} lignes) :")
         st.dataframe(df_planning.head())
     except Exception as e:
-        st.error(f"Erreur lors du chargement de Planning.csv : {e}. Assurez-vous que le fichier est bien un CSV valide avec les colonnes attendues.")
+        st.error(f"Erreur lors du chargement de Planning.csv : {e}. Assurez-vous que le fichier est bien un CSV valide avec les colonnes attendues et le séparateur correct (point-virgule).")
         logger.error(f"Erreur chargement Planning.csv: {e}", exc_info=True)
 else:
     st.info("Veuillez charger votre fichier Planning.csv pour commencer.")
@@ -642,7 +643,7 @@ if fichiers_charges:
                 st.session_state.df_ingredients_recettes
             )
             df_menu_genere, ingredients_utilises_menu, ingredients_stock_non_utilises, liste_courses = menu_generator.generer_menu(
-                transportable_req=transportable_req, temps_req=temps_req
+                transportable_req=transportable_req, temps=temps_req
             )
             st.session_state['df_menus_genere_pour_notion'] = df_menu_genere # Stocker pour l'intégration Notion
 
