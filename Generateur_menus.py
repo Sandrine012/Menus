@@ -419,10 +419,10 @@ class MenuGenerator:
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats généraux.")
         return candidates_triees[:10], recettes_ingredients_manquants
 
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
-            date_repas, participants_str_codes, used_recipes_current_gen_set,
+            date_repas, participants_str_codes, used_recipes_in_current_gen,
             transportable_req_str, temps_req_str, nutrition_req_str
         )
         if not recettes_candidates_initiales:
@@ -499,7 +499,7 @@ class MenuGenerator:
         else:
             logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
 
-    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
+    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, menu_recent_noms_list):
         candidats_restes_ids = []
         sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
 
@@ -516,9 +516,7 @@ class MenuGenerator:
             if not (0 < jours_ecoules <= 2):
                 logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
                 continue
-            if plat_id_orig_str in repas_b_utilises_ids_list:
-                logger.debug(f"Reste {nom_plat_reste} filtré: Déjà utilisé pour un repas B.")
-                continue
+            # Removed the check for plat_id_orig_str in repas_b_utilises_ids_list to allow repetition for Repas B
             if not (nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste):
                 logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
                 continue
@@ -528,9 +526,10 @@ class MenuGenerator:
             logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
 
         if candidats_restes_ids:
-            plat_id_choisi_str = candidats_restes_ids[0]
+            # For Repas B, we can choose randomly or by any other simple criteria,
+            # as repetition is allowed and other complex filters are less critical.
+            plat_id_choisi_str = random.choice(candidats_restes_ids) 
             nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
-            repas_b_utilises_ids_list.append(plat_id_choisi_str)
             logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
             return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
 
@@ -554,7 +553,7 @@ class MenuGenerator:
 
     def generer_menu(self):
         resultats_df_list = []
-        repas_b_utilises_ids = []
+        # Removed repas_b_utilises_ids as it's no longer needed for repetition logic
         plats_transportables_semaine = {} # Réinitialisé à chaque génération
         used_recipes_current_generation_set = set() # Pour éviter les doublons dans la même génération
         menu_recent_noms = [] # Pour la logique d'anti-répétition des premiers mots
@@ -580,7 +579,7 @@ class MenuGenerator:
 
             if participants_str == "B":
                 nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
-                    date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
+                    date_repas_dt, plats_transportables_semaine, menu_recent_noms
                 )
             else:
                 recette_choisie_id, ingredients_manquants_pour_recette_choisie = self._traiter_menu_standard(
