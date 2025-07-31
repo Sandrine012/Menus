@@ -458,6 +458,49 @@ class MenuGenerator:
 
         return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {}), remarques_repas
 
+    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms_list):
+        # Prioriser les restes transportables de la semaine
+        restes_potentials = [
+            r_id for d, r_id in plats_transportables_semaine.items()
+            if d.isocalendar().week == date_repas.isocalendar().week and r_id not in repas_b_utilises_ids
+        ]
+
+        if restes_potentials:
+            recette_id = random.choice(restes_potentials)
+            repas_b_utilises_ids.append(recette_id)
+            nom_plat = self.recette_manager.obtenir_nom(recette_id)
+            logger.info(f"Repas B: Reste choisi: {nom_plat}")
+            return f"Reste: {nom_plat}", recette_id, f"Reste du plat : {nom_plat}"
+
+        # Si pas de restes, chercher une nouvelle recette transportable rapide
+        candidates_transportables = []
+        for recette_id_cand in self.recette_manager.df_recettes.index.astype(str):
+            if not self.recette_manager.est_transportable(recette_id_cand):
+                continue
+            if self.recette_manager.obtenir_temps_preparation(recette_id_cand) > TEMPS_MAX_RAPIDE:
+                continue
+            if self.est_recente(recette_id_cand, date_repas):
+                continue
+            
+            # Anti-répétition sur le premier mot par rapport aux menus récents
+            nom_recette = self.recette_manager.obtenir_nom(recette_id_cand)
+            if nom_recette and "Recette_ID_" not in nom_recette:
+                first_word_cand = nom_recette.lower().split()[0]
+                if any(first_word_cand == nom.lower().split()[0] for nom in menu_recent_noms_list):
+                    logger.debug(f"Recette {nom_recette} (ID: {recette_id_cand}) exclue pour rép. premier mot.")
+                    continue
+
+            candidates_transportables.append(recette_id_cand)
+
+        if candidates_transportables:
+            recette_id = random.choice(candidates_transportables)
+            nom_plat = self.recette_manager.obtenir_nom(recette_id)
+            logger.info(f"Repas B: Nouvelle recette transportable: {nom_plat}")
+            return nom_plat, recette_id, "Plat transportable généré"
+
+        logger.warning(f"Repas B: Pas de reste disponible et aucune nouvelle recette transportable trouvée pour {date_repas.strftime('%d/%m/%Y %H:%M')}.")
+        return "Pas de reste ou plat transportable trouvé", None, "Aucun reste ou plat transportable disponible"
+
     def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
         info_stock_str = ""
         if recette_id_str_pour_eval:
@@ -513,7 +556,12 @@ class MenuGenerator:
                 if recette_choisie_id:
                     ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, 1, date_repas_dt)
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-                    if date_repas_dt.weekday() >= 5: # Samedi ou Dimanche
+                    # S'assurer que les plats transportables de la semaine sont bien enregistrés pour les prochains repas 'B'
+                    # Cette logique semble être pour les week-ends, assurons-nous qu'elle est bien là.
+                    # Au lieu de l'ajouter ici, elle doit être ajoutée si c'est un plat généré pour le week-end,
+                    # ce qui se passe pour les repas non-B. Pour les repas B, le reste est consommé, il n'y a pas de nouveau plat à enregistrer.
+                    # Pour les repas B qui génèrent un nouveau plat (cas sans reste), la logique ci-dessous doit être appliquée.
+                    if "Plat transportable généré" in remarques_repas and date_repas_dt.weekday() >= 5: # Samedi ou Dimanche
                          plats_transportables_semaine[date_repas_dt] = recette_choisie_id
             else:
                 recette_choisie_id, ingredients_manquants_pour_recette_choisie, remarques_repas = self._traiter_menu_standard(
