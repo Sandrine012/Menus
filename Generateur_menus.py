@@ -85,7 +85,7 @@ class RecetteManager:
             ingredients = self.get_ingredients_for_recipe(recette_id_str)
             return any(str(ing.get("Ingrédient ok")) in self.anti_gaspi_ingredients for ing in ingredients if ing.get("Ingrédient ok"))
         except Exception as e:
-            logger.error(f"Erreur dans recette_utilise_ingredient_anti_gaspi pour {recette_id_str}: {e}")
+            logger.error(f"Erreur dans recette_utilise_ingredient_anti_gaspi pour {recette_id_str} : {e}")
             return False
 
     def calculer_quantite_necessaire(self, recette_id_str, nb_personnes):
@@ -575,9 +575,24 @@ def main():
             try:
                 # Gérer le délimiteur pour Planning.csv spécifiquement s'il y a un ';'
                 if file_name == "Planning.csv":
-                    df = pd.read_csv(uploaded_file, sep=';')
+                    # Tentative de lire avec le délimiteur par défaut (virgule), puis avec point-virgule
+                    uploaded_file.seek(0) # Remettre le pointeur au début du fichier
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+                    if len(df.columns) == 1 and ';' in df.iloc[0, 0]: # Vérifier si c'est un CSV avec ';' comme séparateur
+                        uploaded_file.seek(0) # Remettre le pointeur au début du fichier
+                        df = pd.read_csv(uploaded_file, encoding='utf-8', sep=';')
                 else:
-                    df = pd.read_csv(uploaded_file)
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+
+                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
+                if "Temps_total" in df.columns:
+                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+                if "Calories" in df.columns:
+                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
+                if "Proteines" in df.columns:
+                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+
+
                 dataframes[file_name.replace(".csv", "")] = df
                 st.sidebar.success(f"{file_name} chargé avec succès.")
             except Exception as e:
@@ -594,8 +609,8 @@ def main():
 
     # Vérification des colonnes essentielles après le chargement
     try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories"], "Recettes.csv")
-        verifier_colonnes(dataframes["Planning"], ["Date", "Participants"], "Planning.csv")
+        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
+        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
         verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
         verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
@@ -621,31 +636,32 @@ def main():
                 )
                 df_menu_genere, liste_courses = menu_generator.generer_menu()
 
-            st.success("🎉 Menu généré avec succès !")
+                st.success("🎉 Menu généré avec succès !")
 
-            st.header("2. Menu Généré")
-            st.dataframe(df_menu_genere)
+                st.header("2. Menu Généré")
+                st.dataframe(df_menu_genere)
 
-            st.header("3. Liste de Courses (Ingrédients manquants cumulés)")
-            if liste_courses:
-                liste_courses_df = pd.DataFrame(liste_courses.items(), columns=["Ingrédient", "Quantité manquante"])
-                st.dataframe(liste_courses_df)
+                st.header("3. Liste de Courses (Ingrédients manquants cumulés)")
+                if liste_courses:
+                    liste_courses_df = pd.DataFrame(liste_courses.items(), columns=["Ingrédient", "Quantité manquante"])
+                    st.dataframe(liste_courses_df)
 
-                csv = liste_courses_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button(
-                    label="Télécharger la liste de courses (CSV)",
-                    data=csv,
-                    file_name="liste_courses.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses.")
+                    csv = liste_courses_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                    st.download_button(
+                        label="Télécharger la liste de courses (CSV)",
+                        data=csv,
+                        file_name="liste_courses.csv",
+                        mime="text/csv",
+                    )
+                else:
+                    st.info("Aucun ingrédient manquant identifié pour la liste de courses.")
 
-        except ValueError as ve:
-            st.error(f"Erreur de données: {ve}")
-        except Exception as e:
-            st.error(f"Une erreur inattendue est survenue lors de la génération: {e}")
-            logger.exception("Erreur lors de la génération du menu dans Streamlit")
+            except ValueError as ve:
+                st.error(f"Erreur de données: {ve}")
+                logger.exception("Erreur de données lors de la génération du menu")
+            except Exception as e:
+                st.error(f"Une erreur inattendue est survenue lors de la génération: {e}")
+                logger.exception("Erreur inattendue lors de la génération du menu dans Streamlit")
 
 if __name__ == "__main__":
     main()
