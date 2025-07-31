@@ -442,15 +442,9 @@ class MenuGenerator:
             if 0 < jours_ecoules <= 2 and plat_id_orig_str not in repas_b_utilises_ids_list:
                 nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
                 if nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste:
-                    premier_mot_reste = nom_plat_reste.lower().split()[0]
-                    mots_cles_recents_set = set()
-                    if menu_recent_noms_list:
-                            for nom_plat_r in menu_recent_noms_list:
-                                if isinstance(nom_plat_r, str) and nom_plat_r.strip():
-                                    try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
-                                    except IndexError: pass
-                    if premier_mot_reste not in mots_cles_recents_set:
-                        candidats_restes_ids.append(plat_id_orig_str)
+                    # Règle modifiée : ne pas exclure si le premier mot du reste a déjà été dans un autre plat récent.
+                    # L'objectif ici est de trouver un reste transportable, pas d'éviter la répétition sémantique.
+                    candidats_restes_ids.append(plat_id_orig_str)
 
         if candidats_restes_ids:
             plat_id_choisi_str = candidats_restes_ids[0]
