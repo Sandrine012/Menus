@@ -270,6 +270,10 @@ class MenusHistoryManager:
             errors="coerce"
         )
         self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        # Ajout de la colonne 'Semaine' si elle n'existe pas, calculée à partir de la 'Date'
+        if "Semaine" not in self.df_menus_historique.columns:
+            self.df_menus_historique["Semaine"] = self.df_menus_historique["Date"].dt.isocalendar().week.astype(int)
+            logger.info("Colonne 'Semaine' générée pour l'historique des menus.")
 
 class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes):
@@ -288,6 +292,7 @@ class MenuGenerator:
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
             df_hist = self.menus_history_manager.df_menus_historique
+            # La colonne 'Semaine' est maintenant garantie d'exister par MenusHistoryManager
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
                 return set()
 
@@ -604,12 +609,12 @@ def main():
 
     if all_files_uploaded and st.button("Générer le Menu et la Liste de Courses"):
         try:
-            # Vérification des colonnes essentielles
+            # Vérification des colonnes essentielles (retiré 'Semaine' pour Menus.csv)
             verifier_colonnes(dataframes["Recettes"], [COLONNE_NOM, COLONNE_ID_RECETTE, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories"], "Recettes.csv")
             verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
             verifier_colonnes(dataframes["Ingredients"], [COLONNE_NOM, COLONNE_ID_INGREDIENT, "Qte reste", "unité"], "Ingredients.csv")
             verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
-            verifier_colonnes(dataframes["Menus"], ["Date", "Semaine", "Recette"], "Menus.csv")
+            verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv") # 'Semaine' n'est plus requise ici
 
 
             with st.spinner("Génération du menu en cours..."):
