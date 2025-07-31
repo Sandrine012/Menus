@@ -20,7 +20,7 @@ FICHIER_SORTIE_MENU_CSV = "Menus_generes.csv"
 FICHIER_SORTIE_LISTES_TXT = "Listes_ingredients.txt"
 FICHIER_EXPORT_NOTION_CSV = "Menus_extraits_Notion.csv" # Pour l'extraction Notion
 
-# Noms de colonnes utilisés dans les DataFrames (doivent correspondre aux noms de vos propriétés Notion)
+# Noms de colonnes utilisés dans les DataFrames (doivent correspondre aux noms de vos propriétés Notion ou CSV)
 COLONNE_ID_RECETTE = "ID Recette"
 COLONNE_NOM = "Nom"
 COLONNE_TEMPS_TOTAL = "Temps total (min)"
@@ -36,7 +36,7 @@ try:
     DATABASE_ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
     DATABASE_ID_RECETTES = st.secrets["notion_database_id_recettes"]
     DATABASE_ID_MENUS = st.secrets["notion_database_id_menus"] # Base de données pour les menus générés/historique
-    DATABASE_ID_PLANNING = st.secrets["notion_database_id_planning"] # Nouvelle ID pour la base de données Planning
+    # DATABASE_ID_PLANNING n'est plus nécessaire car Planning vient d'un CSV uploadé
 
     notion = Client(auth=NOTION_API_KEY)
 except KeyError as e:
@@ -153,23 +153,6 @@ def get_notion_data_to_dataframe(database_id, columns_mapping, date_cols=None):
 
 
 # --- Fonctions d'extraction spécifiques aux bases de données ---
-
-def get_planning_data():
-    """Extrait les données du planning depuis Notion."""
-    # Mapping des noms de propriétés Notion aux noms de colonnes DataFrame
-    planning_columns_mapping = {
-        "Date du repas": COLONNE_DATE_PLANNING, # Nom de votre propriété "Date" dans Notion
-        "Participants": COLONNE_PARTICIPANTS_PLANNING, # Nom de votre propriété "Multi-select" des participants
-        "Type de repas": "Type de repas", # Par exemple, "Standard", "Reste", "Restaurant"
-        "Recette proposée": "Recette proposée" # Si vous avez une relation vers les recettes
-    }
-    df = get_notion_data_to_dataframe(DATABASE_ID_PLANNING, planning_columns_mapping, date_cols=[COLONNE_DATE_PLANNING])
-    if not df.empty:
-        # Assurez-vous que la colonne de date est au bon format pour l'utilisation dans MenuGenerator
-        df[COLONNE_DATE_PLANNING] = pd.to_datetime(df[COLONNE_DATE_PLANNING], errors='coerce')
-        # Trier par date pour s'assurer de la bonne séquence
-        df = df.sort_values(by=COLONNE_DATE_PLANNING).reset_index(drop=True)
-    return df
 
 def get_recettes_data():
     """Extrait les données des recettes depuis Notion."""
@@ -459,8 +442,6 @@ class MenuGenerator:
                     if ing_id_cons and str(ing_id_cons).lower() not in ['nan', 'none', '']:
                         ingredients_effectivement_utilises_ids_set.add(str(ing_id_cons))
 
-        noms_ingredients_utilises_final = sorted(list(filter(None, [self.recette_manager.obtenir_nom_ingredient_par_id(ing_id) for ing_id in ingredients_effectivement_utilises_ids_set])))
-
         df_stock_final_simule = self.recette_manager.stock_simule.copy()
         noms_ingredients_non_utilises_en_stock = []
         if COLONNE_ID_INGREDIENT in df_stock_final_simule.columns:
@@ -488,8 +469,12 @@ class MenuGenerator:
             else:
                 liste_courses_finale.append(f"ID Ingrédient {ing_id_achat}: {qte_achat:.2f} unité(s) (Nom non trouvé)")
         liste_courses_finale.sort()
+        
+        # Filtrer les ingrédients effectivement utilisés pour la liste des ingrédients utilisés
+        ingredients_utilises_menu = sorted(list(filter(None, [self.recette_manager.obtenir_nom_ingredient_par_id(ing_id) for ing_id in ingredients_effectivement_utilises_ids_set])))
 
-        return pd.DataFrame(resultats_df_list), noms_ingredients_utilises_final, noms_ingredients_non_utilises_en_stock, liste_courses_finale
+
+        return pd.DataFrame(resultats_df_list), ingredients_utilises_menu, noms_ingredients_non_utilises_en_stock, liste_courses_finale
 
 # --- Fonctions d'intégration Notion (du code Generateur (4).py) ---
 
@@ -571,18 +556,35 @@ def integrate_with_notion(df_menus_genere, database_id):
 st.set_page_config(layout="wide", page_title="Générateur de Menus Automatisé avec Notion")
 
 st.title("🍽️ Générateur de Menus Automatisé")
-st.markdown("Bienvenue ! Cet outil vous aide à générer des plannings de menus et des listes de courses en utilisant vos données Notion, puis à les réintégrer.")
+st.markdown("Bienvenue ! Cet outil vous aide à générer des plannings de menus et des listes de courses en utilisant vos données Notion et un fichier de planning local, puis à les réintégrer.")
 
-# --- Section de chargement des données depuis Notion ---
-st.header("1. Charger les données depuis Notion")
-st.markdown("Cliquez sur le bouton ci-dessous pour extraire les données (Planning, Recettes, Ingrédients, etc.) depuis vos bases de données Notion.")
+# --- Section de chargement des données ---
+st.header("1. Charger les données")
 
-if st.button("Charger toutes les données depuis Notion"):
-    with st.spinner("Chargement des données depuis Notion en cours..."):
-        # Charger Planning
-        df_planning = get_planning_data()
+# Chargement du fichier Planning.csv
+st.subheader("Charger le fichier Planning.csv :")
+uploaded_planning_file = st.file_uploader("Choisissez votre fichier Planning.csv", type="csv", key="planning_uploader")
+if uploaded_planning_file is not None:
+    try:
+        df_planning = pd.read_csv(uploaded_planning_file, sep=',', encoding='utf-8')
+        verifier_colonnes(df_planning, [COLONNE_DATE_PLANNING, COLONNE_PARTICIPANTS_PLANNING], "Planning.csv")
+        # Conversion des dates
+        df_planning[COLONNE_DATE_PLANNING] = pd.to_datetime(df_planning[COLONNE_DATE_PLANNING], format="%d/%m/%Y %H:%M", errors='coerce')
+        df_planning = df_planning.sort_values(by=COLONNE_DATE_PLANNING).reset_index(drop=True)
         st.session_state['df_planning'] = df_planning
+        st.success("Fichier Planning.csv chargé avec succès !")
+        st.write(f"Aperçu de Planning.csv ({len(df_planning)} lignes) :")
+        st.dataframe(df_planning.head())
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de Planning.csv : {e}. Assurez-vous que le fichier est bien un CSV valide avec les colonnes attendues.")
+        logger.error(f"Erreur chargement Planning.csv: {e}", exc_info=True)
+else:
+    st.info("Veuillez charger votre fichier Planning.csv pour commencer.")
 
+# Bouton de chargement des données Notion
+st.subheader("Charger les données Recettes, Ingrédients et Historique depuis Notion :")
+if st.button("Charger les données Notion"):
+    with st.spinner("Chargement des données depuis Notion en cours..."):
         # Charger Recettes
         df_recettes = get_recettes_data()
         st.session_state['df_recettes'] = df_recettes
@@ -600,15 +602,15 @@ if st.button("Charger toutes les données depuis Notion"):
         st.session_state['df_menus_hist'] = df_menus_hist
 
         # Afficher l'état du chargement
-        if not df_planning.empty and not df_recettes.empty and not df_ingredients.empty and not df_ingredients_recettes.empty and not df_menus_hist.empty:
-            st.success("Toutes les données nécessaires ont été chargées avec succès depuis Notion !")
-            st.write(f"- Planning: {len(df_planning)} entrées")
+        if not df_recettes.empty and not df_ingredients.empty and not df_ingredients_recettes.empty:
+            st.success("Données Notion (Recettes, Ingrédients, Ingrédients Recettes, Historique Menus) chargées avec succès !")
             st.write(f"- Recettes: {len(df_recettes)} entrées")
             st.write(f"- Ingrédients (stock): {len(df_ingredients)} entrées")
             st.write(f"- Ingrédients par Recette: {len(df_ingredients_recettes)} entrées")
             st.write(f"- Historique des Menus: {len(df_menus_hist)} entrées")
         else:
-            st.error("Certaines données n'ont pas pu être chargées. Veuillez vérifier vos IDs de bases de données et les permissions Notion.")
+            st.error("Certaines données Notion n'ont pas pu être chargées. Veuillez vérifier vos IDs de bases de données et les permissions Notion.")
+
 
 # --- Section de Génération des Menus ---
 st.header("2. Générer les menus et listes de courses")
@@ -623,7 +625,7 @@ fichiers_charges = (
 ) # df_menus_hist peut être vide si aucun historique
 
 if fichiers_charges:
-    # Options de génération (peut être déplacé après le bouton Générer si vous voulez qu'elles s'affichent après chargement)
+    # Options de génération
     st.subheader("Options de Génération :")
     transportable_req = st.checkbox("Inclure uniquement les plats transportables pour les week-ends ?", value=False, help="Si coché, la génération priorisera les recettes marquées comme 'Transportable' pour les repas du week-end.")
     temps_req = st.slider("Temps de préparation maximal souhaité (en minutes) :", min_value=15, max_value=240, value=90, step=15, help="Temps maximum pour les recettes sélectionnées.")
@@ -635,7 +637,7 @@ if fichiers_charges:
             menu_generator = MenuGenerator(
                 st.session_state.df_menus_hist,
                 st.session_state.df_recettes,
-                st.session_state.df_planning,
+                st.session_state.df_planning, # Utilise le planning chargé localement
                 st.session_state.df_ingredients,
                 st.session_state.df_ingredients_recettes
             )
@@ -711,7 +713,7 @@ if fichiers_charges:
             else:
                 st.warning("Aucun menu n'a pu être généré. Veuillez vérifier vos données de planification, vos recettes et vos options de génération.")
 else:
-    st.info("Veuillez charger les données depuis Notion à l'étape 1 pour activer la génération des menus.")
+    st.info("Veuillez charger le fichier Planning.csv et les données Notion à l'étape 1 pour activer la génération des menus.")
 
 
 # --- Section d'intégration des menus générés vers Notion ---
