@@ -9,24 +9,6 @@ Original file is located at
 **Charger fichier Planning.csv**
 """
 
-# @title
-from IPython.display import display, HTML
-
-# Affichage d'un message visuel bien visible
-display(HTML("""
-    <div style="border:2px solid #1976D2; border-radius:8px; padding:16px; background:#E3F2FD; margin-bottom:10px;">
-        <h3 style="color:#1976D2; margin:0;">
-            📄 Veuillez charger le fichier <b>Planning.csv</b> (ou tout fichier contenant "planning" dans le nom) en cliquant sur <u>Choisir des fichiers</u> ci-dessous.
-        </h3>
-        <p style="color:#333;">Le traitement ne pourra pas continuer sans ce fichier.</p>
-    </div>
-"""))
-
-try:
-    from google.colab import files
-    uploaded = files.upload()
-except ImportError:
-    print("⚠️ Ce code doit être exécuté dans Google Colab.")
 
 import pandas as pd
 
