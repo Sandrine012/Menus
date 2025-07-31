@@ -25,11 +25,20 @@ FICHIER_EXPORT_NOTION_CSV = "Menus_extraits_Notion.csv" # Nouveau nom pour le fi
 # Récupérer la clé API et l'ID de la base de données depuis les secrets Streamlit
 try:
     NOTION_API_KEY = st.secrets["notion_api_key"]
-    DATABASE_ID = st.secrets["notion_database_id"] # ID de votre base de données "Planning Menus"
+    # Utilisation des IDs de base de données spécifiques
+    DATABASE_ID_MENUS = st.secrets["notion_database_id_menus"]
+    DATABASE_ID_RECETTES = st.secrets["notion_database_id_recettes"]
+    DATABASE_ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+    DATABASE_ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
+
     notion = Client(auth=NOTION_API_KEY)
-except KeyError:
-    st.error("Les secrets Notion (notion_api_key ou notion_database_id) ne sont pas configurés. "
-             "Veuillez les ajouter dans le fichier .streamlit/secrets.toml ou via l'interface Streamlit Cloud.")
+except KeyError as e:
+    st.error(f"Le secret Notion manquant est : {e}. "
+             "Veuillez configurer tous les secrets Notion dans le fichier .streamlit/secrets.toml "
+             "ou via l'interface Streamlit Cloud. "
+             "Assurez-vous d'avoir: notion_api_key, notion_database_id_menus, "
+             "notion_database_id_recettes, notion_database_id_ingredients, "
+             "notion_database_id_ingredients_recettes.")
     st.stop() # Arrête l'exécution de l'application si les secrets ne sont pas trouvés.
 except Exception as e:
     st.error(f"Erreur lors de l'initialisation du client Notion : {e}")
@@ -138,8 +147,8 @@ def get_page_id_by_name(database_id, page_name_property, page_name):
             return results[0]["id"]
         return None
     except Exception as e:
-        st.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}': {e}")
-        logger.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}': {e}")
+        st.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}' dans la base {database_id}: {e}")
+        logger.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}' dans la base {database_id}: {e}")
         return None
 
 # --- Fonctions de traitement des données existantes ---
@@ -181,7 +190,8 @@ def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recett
     df_menus_complet = pd.merge(df_menus, df_recettes, left_on='recette_nom', right_on='nom', how='left')
     df_menus_complet.rename(columns={'nom': 'Nom Recette', 'participants': 'Participant(s)'}, inplace=True)
 
-    df_menus_complet['Recette ID'] = df_menus_complet['recette_nom'].apply(lambda x: get_page_id_by_name(DATABASE_ID, "Nom", x) if x else None) # Assurez-vous que DATABASE_ID est la bonne pour les recettes
+    # Utilisation de DATABASE_ID_RECETTES pour chercher l'ID de la recette
+    df_menus_complet['Recette ID'] = df_menus_complet['recette_nom'].apply(lambda x: get_page_id_by_name(DATABASE_ID_RECETTES, "Nom", x) if x else None) # Assurez-vous que "Nom" est la propriété de titre de votre base de recettes
 
     st.success("Traitement des données terminé.")
     logger.info("Fin du traitement des données.")
@@ -259,7 +269,7 @@ def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recet
 
 
 # --- Fonction d'intégration Notion (à adapter si nécessaire) ---
-def integrate_with_notion(df_menus_complet, database_id):
+def integrate_with_notion(df_menus_complet): # Suppression de database_id du paramètre pour utiliser DATABASE_ID_MENUS directement
     st.info("Intégration avec Notion en cours...")
     logger.info("Début de l'intégration avec Notion.")
 
@@ -275,7 +285,8 @@ def integrate_with_notion(df_menus_complet, database_id):
     recette_ids = {}
     st.info("Vérification des recettes existantes dans Notion...")
     for recette_nom in df_to_integrate['recette_nom'].unique():
-        page_id = get_page_id_by_name(database_id, "Nom", recette_nom) # Assurez-vous que "Nom" est la propriété de titre de votre base de recettes
+        # Utilisation de DATABASE_ID_RECETTES pour chercher la recette
+        page_id = get_page_id_by_name(DATABASE_ID_RECETTES, "Nom", recette_nom) # Assurez-vous que "Nom" est la propriété de titre de votre base de recettes
         if page_id:
             recette_ids[recette_nom] = page_id
         else:
@@ -331,7 +342,8 @@ def integrate_with_notion(df_menus_complet, database_id):
 
         # Vérifier si la page existe déjà pour éviter les doublons
         # On suppose que le titre "Nom" est unique pour un même jour et repas
-        existing_page_id = get_page_id_by_name(database_id, "Nom", properties["Nom"]["title"][0]["text"]["content"])
+        # Utilisation de DATABASE_ID_MENUS pour chercher la page de menu existante
+        existing_page_id = get_page_id_by_name(DATABASE_ID_MENUS, "Nom", properties["Nom"]["title"][0]["text"]["content"])
 
         if existing_page_id:
             st.info(f"La page pour '{repas_type} - {recette_nom} ({date_str})' existe déjà. Mise à jour en cours...")
@@ -341,7 +353,8 @@ def integrate_with_notion(df_menus_complet, database_id):
             pass
         else:
             st.info(f"Création de la page pour '{repas_type} - {recette_nom} ({date_str})'...")
-            create_page(DATABASE_ID, properties)
+            # Utilisation de DATABASE_ID_MENUS pour créer la page de menu
+            create_page(DATABASE_ID_MENUS, properties)
     st.success("Intégration avec Notion terminée.")
     logger.info("Fin de l'intégration avec Notion.")
 
@@ -365,7 +378,7 @@ def extract_notion_menus_to_csv(notion_client, database_id_to_extract, csv_expor
     retry_delay = 10
     retries = 0
     api_timeout_seconds = 180
-
+    
     total_extracted = 0
     
     csv_buffer = io.StringIO()
@@ -583,7 +596,7 @@ if all(df is not None for df in [df_planning, df_recettes, df_ingredients, df_in
                 if notion_integrate:
                     if st.button("Lancer l'intégration Notion"):
                         with st.spinner("Intégration Notion en cours..."):
-                            integrate_with_notion(df_menus_complet, DATABASE_ID)
+                            integrate_with_notion(df_menus_complet) # Plus besoin de passer database_id
                             st.success("Processus d'intégration Notion terminé.")
             else:
                 st.warning("Aucun menu n'a pu être généré. Veuillez vérifier vos fichiers.")
@@ -596,7 +609,8 @@ st.markdown("Cette section vous permet de télécharger un fichier CSV contenant
 
 if st.button("Extraire et Télécharger les Menus de Notion"):
     with st.spinner("Extraction en cours depuis Notion..."):
-        csv_data_extracted = extract_notion_menus_to_csv(notion, DATABASE_ID, FICHIER_EXPORT_NOTION_CSV)
+        # Utilisation de DATABASE_ID_MENUS pour l'extraction
+        csv_data_extracted = extract_notion_menus_to_csv(notion, DATABASE_ID_MENUS, FICHIER_EXPORT_NOTION_CSV)
         if csv_data_extracted:
             st.download_button(
                 label="Télécharger Menus_extraits_Notion.csv",
