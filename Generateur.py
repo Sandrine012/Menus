@@ -1,66 +1,31 @@
-from IPython.display import display, HTML
+import streamlit as st
 import pandas as pd
-import csv
-from notion_client import Client
-from notion_client.errors import RequestTimeoutError
+import logging
 import time
 import httpx
-import logging
 import io
+import json
+from notion_client import Client
+from notion_client.errors import RequestTimeoutError
 
-# --- Configuration du logging ---
+# --- Configuration du logger ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Affichage d'un message visuel bien visible pour le chargement de Planning.csv ---
-display(HTML("""
-    <div style="border:2px solid #1976D2; border-radius:8px; padding:16px; background:#E3F2FD; margin-bottom:10px;">
-        <h3 style="color:#1976D2; margin:0;">
-            📄 Veuillez charger le fichier <b>Planning.csv</b> (ou tout fichier contenant "planning" dans le nom) en cliquant sur <u>Choisir des fichiers</u> ci-dessous.
-        </h3>
-        <p style="color:#333;">Le traitement ne pourra pas continuer sans ce fichier.</p>
-    </div>
-"""))
-
-# --- Chargement du fichier Planning.csv ---
+# --- Connexion à Notion et IDs des bases de données ---
 try:
-    from google.colab import files
-    uploaded = files.upload()
-except ImportError:
-    print("⚠️ Ce code doit être exécuté dans Google Colab.")
-    # Pour un environnement non-Colab, vous pourriez ajouter une alternative ici,
-    # comme demander un chemin de fichier local.
-    raise RuntimeError("Ce code nécessite un environnement Google Colab pour la fonction files.upload().")
+    NOTION_API_KEY = st.secrets["notion_api_key"]
+    DATABASE_ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
 
-planning_file = None
-for fname in uploaded.keys():
-    if 'planning' in fname.lower():
-        planning_file = fname
-        break
+    notion = Client(auth=NOTION_API_KEY)
+except KeyError as e:
+    st.error(f"Erreur de configuration des secrets Notion : {e}. "
+             "Veuillez vérifier votre fichier .streamlit/secrets.toml et vous assurer que 'notion_api_key' et 'notion_database_id_ingredients' sont définis.")
+    st.stop() # Arrête l'exécution de l'application si les secrets ne sont pas configurés
 
-if planning_file is not None:
-    print(f"✅ Fichier {planning_file} chargé avec succès !")
-    # Détection automatique du séparateur CSV
-    # Utiliser io.BytesIO(uploaded[planning_file]) pour lire directement depuis le contenu uploadé
-    df_planning = pd.read_csv(io.BytesIO(uploaded[planning_file]), sep=None, engine='python')
-    print("Aperçu de Planning.csv :")
-    print(df_planning.head())
-else:
-    print("❌ Aucun fichier contenant 'planning' n'a été chargé. Veuillez réexécuter la cellule et charger le bon fichier.")
-    raise RuntimeError("Fichier Planning.csv manquant.")
-
-# --- Paramètres et Fonctions d'extraction de la base de données Notion (Ingrédients) ---
-notion = Client(auth="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")
-database_id_ingredients = "b23b048b67334032ac1ae4e82d308817" # Renommé pour plus de clarté
-csv_filename_ingredients = "Ingredients.csv" # Renommé pour plus de clarté
-num_rows_to_extract = 1000  # Limite pour les tests, modifiable
-
-batch_size = 25
-api_timeout_seconds = 180
-max_retries = 7 # Non utilisé dans l'exemple actuel mais bon à garder
-
-# Fonction pour extraire la valeur d'une propriété Notion
+# --- Fonctions d'extraction de propriétés Notion ---
 def extract_property_value(prop):
+    """Extrait la valeur d'une propriété de page Notion."""
     if not isinstance(prop, dict):
         return ""
     t = prop.get("type")
@@ -87,8 +52,6 @@ def extract_property_value(prop):
     elif t == "people":
         return ", ".join([person.get("name", "") for person in prop.get("people", [])])
     elif t == "relation":
-        # Pour les relations, souvent on veut les IDs ou faire une requête secondaire
-        # Ici, on extrait juste les IDs pour le CSV
         return ", ".join([rel.get("id", "") for rel in prop.get("relation", [])])
     elif t == "url":
         return prop.get("url", "")
@@ -112,98 +75,173 @@ def extract_property_value(prop):
     elif t == "rollup":
         rollup = prop.get("rollup", {})
         if rollup.get("type") == "array":
-            # Gérer les rollups qui sont des tableaux d'éléments
-            # Cela peut nécessiter une logique plus complexe selon le contenu des éléments
             return ", ".join([
-                str(item.get("plain_text", "") or item.get("number", "") or "") # Exemple simplifié
+                str(item.get("plain_text", "") or item.get("number", "") or "")
                 for item in rollup.get("array", [])
             ])
         elif rollup.get("type") in ["number", "string", "boolean", "date"]:
-            # Accéder directement à la valeur si c'est un type simple
             return str(rollup.get(rollup.get("type"), ""))
     return ""
 
-# --- Extraction des données de la base Notion et écriture dans Ingredients.csv ---
-total_extracted = 0
-next_cursor = None
+# --- Fonctions de récupération des données Notion avec Caching Streamlit ---
+@st.cache_data(show_spinner="Chargement des données Notion...", ttl=3600) # Cache pendant 1 heure
+def fetch_notion_data(database_id: str, filter_json_str: str = None, columns_mapping: dict = None):
+    """
+    Récupère les données d'une base de données Notion et les retourne sous forme de DataFrame.
+    Gère la pagination et les retries.
+    filter_json_str: Filtre de la requête Notion sérialisé en JSON string (pour la compatibilité du cache).
+    columns_mapping: Dictionnaire de mappage des noms de propriétés Notion vers les noms de colonnes DataFrame.
+    """
+    all_rows = []
+    next_cursor = None
+    total_extracted = 0
+    batch_size = 100 # Taille de page max pour l'API Notion
+    api_timeout_seconds = 60 # Timeout pour la requête API
 
-try:
-    with open(csv_filename_ingredients, 'w', newline='', encoding='utf-8') as csvfile:
-        csv_writer = None
-        header_written = False # Nouveau flag pour s'assurer que l'en-tête est écrit une seule fois
+    filter_cond = json.loads(filter_json_str) if filter_json_str else {}
 
-        while total_extracted < num_rows_to_extract:
-            try:
-                # Requête Notion
-                results = notion.databases.query(
-                    database_id=database_id_ingredients,
-                    start_cursor=next_cursor,
-                    page_size=batch_size,
-                    timeout=api_timeout_seconds,
-                    filter={
-                        "property": "Type de stock",
-                        "select": {"equals": "Autre type"}
-                    }
-                )
-                page_results = results.get("results", [])
+    logger.info(f"Début de l'extraction de la base de données Notion: {database_id}")
 
-                if not page_results:
-                    logger.info("Aucun résultat retourné par l'API ou fin de la base de données atteinte.")
-                    break
+    while True:
+        try:
+            query_params = {
+                "database_id": database_id,
+                "page_size": batch_size,
+                "timeout": api_timeout_seconds,
+            }
+            if next_cursor:
+                query_params["start_cursor"] = next_cursor
+            if filter_cond: # Appliquer le filtre s'il existe
+                query_params["filter"] = filter_cond
 
-                if not header_written:
-                    # Définir l'en-tête une seule fois
-                    header = ["Page_ID", "Nom", "Type de stock", "unité", "Qte reste"]
-                    csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, dialect='excel')
-                    csv_writer.writerow(header)
-                    header_written = True
+            results = notion.databases.query(**query_params)
+            page_results = results.get("results", [])
 
-                for result in page_results:
-                    if total_extracted >= num_rows_to_extract:
-                        break # Arrêter si le nombre maximum de lignes est atteint
+            if not page_results:
+                logger.info(f"Fin de l'extraction ou aucun résultat pour {database_id}.")
+                break
 
-                    properties = result.get("properties", {})
-                    row_values = [result.get("id", "")]
-                    
-                    # Extraire les valeurs pour chaque colonne de l'en-tête
-                    row_values.append(extract_property_value(properties.get("Nom", {})))
-                    row_values.append(extract_property_value(properties.get("Type de stock", {})))
-                    row_values.append(extract_property_value(properties.get("unité", {})))
-                    row_values.append(extract_property_value(properties.get("Qte reste", {})))
-                    
-                    csv_writer.writerow(row_values)
-                    total_extracted += 1
+            for result in page_results:
+                properties = result.get("properties", {})
+                row_data = {"Page_ID": result.get("id", "")}
 
-                next_cursor = results.get("next_cursor")
-                if not next_cursor:
-                    break # Plus de pages à charger
-                
-                time.sleep(1) # Respecter les limites de débit de l'API Notion
+                if columns_mapping:
+                    for notion_prop, df_col in columns_mapping.items():
+                        row_data[df_col] = extract_property_value(properties.get(notion_prop, {}))
+                else:
+                    # Fallback générique si aucun mapping n'est fourni.
+                    for prop_name, prop_data in properties.items():
+                        row_data[prop_name] = extract_property_value(prop_data)
 
-            except (httpx.TimeoutException, RequestTimeoutError) as e:
-                logger.warning(f"Timeout détecté lors de la requête Notion : {e}. Réessai...")
-                time.sleep(10) # Attendre avant de réessayer après un timeout
-                continue
-            except Exception as e:
-                logger.exception(f"Erreur inattendue lors de l'extraction Notion : {e}")
-                break # Arrêter en cas d'erreur inattendue
+                all_rows.append(row_data)
+                total_extracted += 1
+
+            next_cursor = results.get("next_cursor")
+            if not next_cursor:
+                break
+            time.sleep(0.1) # Petit délai pour respecter les limites de débit de l'API
+
+        except (httpx.TimeoutException, RequestTimeoutError) as e:
+            logger.warning(f"Timeout détecté lors de la requête Notion ({database_id}): {e}. Réessai...")
+            time.sleep(5) # Attendre plus longtemps en cas de timeout
+            continue # Réessayer la même requête
+        except Exception as e:
+            logger.exception(f"Erreur inattendue lors de l'extraction Notion de {database_id}: {e}")
+            st.error(f"Erreur lors de la récupération des données de Notion pour la base {database_id}: {e}")
+            return pd.DataFrame() # Retourne un DataFrame vide en cas d'erreur grave
+
+    if all_rows:
+        df = pd.DataFrame(all_rows)
+        logger.info(f"Extraction réussie : {total_extracted} lignes de {database_id}.")
+        return df
+    else:
+        logger.info(f"Aucune donnée extraite de {database_id}.")
+        return pd.DataFrame()
+
+# Fonction spécifique pour la base de données Ingrédients
+def get_ingredients_data():
+    filter_cond = {"property": "Type de stock", "select": {"equals": "Autre type"}}
+    columns_mapping = {
+        "Nom": "Nom",
+        "Type de stock": "Type de stock",
+        "unité": "unité",
+        "Qte reste": "Qte reste"
+    }
+    return fetch_notion_data(
+        DATABASE_ID_INGREDIENTS,
+        filter_json_str=json.dumps(filter_cond, sort_keys=True), # Convertir le dict en string hashable
+        columns_mapping=columns_mapping
+    )
+
+# --- Fonction Principale de l'Application Streamlit ---
+def main():
+    st.set_page_config(layout="wide", page_title="Générateur de Menus Notion")
+    st.title("🍽️ Générateur de Menus Automatisé avec Notion")
+
+    st.sidebar.header("Chargement des Données")
+
+    # 1. Chargement du fichier Planning.csv
+    st.sidebar.subheader("1. Fichier Planning des Repas (.csv)")
+    uploaded_planning_file = st.sidebar.file_uploader(
+        "Choisissez votre fichier Planning.csv", type=["csv"], key="planning_uploader"
+    )
+
+    # Initialisation des DataFrames dans session_state si non présents
+    if 'df_planning' not in st.session_state:
+        st.session_state['df_planning'] = pd.DataFrame()
+    if 'df_ingredients' not in st.session_state:
+        st.session_state['df_ingredients'] = pd.DataFrame()
+
+    if uploaded_planning_file is not None:
+        try:
+            df_planning_loaded = pd.read_csv(uploaded_planning_file, sep=None, engine='python')
+            st.session_state['df_planning'] = df_planning_loaded
+            st.sidebar.success("Fichier Planning.csv chargé avec succès.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+            st.session_state['df_planning'] = pd.DataFrame()
+    else:
+        st.sidebar.info("Veuillez charger votre fichier Planning.csv.")
+
+    # 2. Récupération des données Notion (Ingrédients)
+    st.sidebar.subheader("2. Données Ingrédients (Notion)")
     
-    logger.info(f"Extraction terminée. {total_extracted} lignes exportées dans {csv_filename_ingredients}.")
-    print(f"✅ Fichier '{csv_filename_ingredients}' créé avec succès !")
+    # Bouton de rechargement pour les données Ingrédients
+    if st.sidebar.button("Charger/Recharger Ingrédients", key="reload_ingredients"):
+        st.session_state['df_ingredients'] = get_ingredients_data()
+        if not st.session_state['df_ingredients'].empty:
+            st.sidebar.success(f"Données Ingrédients (Notion) chargées ({len(st.session_state['df_ingredients'])} lignes).")
+        else:
+            st.sidebar.warning("Aucune donnée Ingrédients chargée depuis Notion ou erreur.")
+    # Charger au premier lancement si pas déjà en session_state
+    elif st.session_state['df_ingredients'].empty:
+        st.session_state['df_ingredients'] = get_ingredients_data()
+        if not st.session_state['df_ingredients'].empty:
+            st.sidebar.success(f"Données Ingrédients (Notion) chargées ({len(st.session_state['df_ingredients'])} lignes).")
+        else:
+            st.sidebar.warning("Aucune donnée Ingrédients chargée depuis Notion ou erreur.")
+    else:
+        st.sidebar.info("Données Ingrédients déjà chargées.")
 
-except IOError as e:
-    logger.error(f"Erreur d'écriture du fichier '{csv_filename_ingredients}' : {e}")
-    print(f"❌ Erreur : Impossible d'écrire le fichier '{csv_filename_ingredients}'. {e}")
+    st.header("1. Vérification des Données Chargées")
+    if not st.session_state['df_planning'].empty:
+        st.write("✅ Planning.csv est chargé.")
+        st.subheader("Aperçu de Planning.csv :")
+        st.dataframe(st.session_state['df_planning'].head())
+    else:
+        st.write("❌ Planning.csv n'est pas encore chargé. Veuillez le charger dans la barre latérale.")
 
-# Vous pouvez maintenant lire df_planning et le fichier Ingredients.csv généré (df_ingredients)
-# pour continuer le traitement dans les étapes suivantes de votre Colab.
+    if not st.session_state['df_ingredients'].empty:
+        st.write("✅ Données Ingrédients (Notion) chargées.")
+        st.subheader("Aperçu de la table Ingrédients (Notion) :")
+        st.dataframe(st.session_state['df_ingredients'].head())
+    else:
+        st.write("❌ Données Ingrédients (Notion) manquantes ou non chargées.")
+        st.info("Cliquez sur 'Charger/Recharger Ingrédients' dans la barre latérale pour les récupérer.")
 
-# Exemple de lecture du fichier Ingredients.csv généré :
-try:
-    df_ingredients = pd.read_csv(csv_filename_ingredients)
-    print("\nAperçu de Ingredients.csv (extrait de Notion) :")
-    print(df_ingredients.head())
-except FileNotFoundError:
-    print(f"Le fichier {csv_filename_ingredients} n'a pas été trouvé. Il pourrait y avoir eu une erreur lors de l'extraction.")
-except Exception as e:
-    print(f"Erreur lors de la lecture de {csv_filename_ingredients} : {e}")
+    st.info("Pour le moment, l'application se limite au chargement du Planning.csv et des Ingrédients de Notion.")
+    st.info("N'oubliez pas de configurer votre fichier `.streamlit/secrets.toml` avec les clés API et IDs de base de données nécessaires.")
+
+
+if __name__ == "__main__":
+    main()
