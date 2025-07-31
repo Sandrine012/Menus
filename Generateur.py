@@ -214,7 +214,13 @@ def get_ingredients_recettes_data():
 
         # Conversion de 'Qté/pers_s' en numérique, gérant les virgules
         if 'Qté/pers_s' in df.columns:
-            df['Qté/pers_s'] = df['Qté/pers_s'].astype(str).str.replace(',', '.').replace('', '0').astype(float)
+            # Remplacer les virgules par des points, puis convertir en numérique (NaN pour les erreurs),
+            # puis remplir les NaN avec 0.
+            df['Qté/pers_s'] = pd.to_numeric(
+                df['Qté/pers_s'].astype(str).str.replace(',', '.').replace('', '0'),
+                errors='coerce' # Les valeurs non convertibles deviennent NaN
+            ).fillna(0) # Remplir les NaN avec 0
+
             df = df[df['Qté/pers_s'] > 0] # Filtrer les lignes où la quantité est > 0
 
     # Réorganiser les colonnes pour correspondre à l'en-tête de votre CSV initial
