@@ -16,11 +16,14 @@ logger = logging.getLogger(__name__)
 try:
     NOTION_API_KEY = st.secrets["notion_api_key"]
     DATABASE_ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+    # Nouvelle base de données pour Ingrédients_recettes
+    DATABASE_ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 
     notion = Client(auth=NOTION_API_KEY)
 except KeyError as e:
     st.error(f"Erreur de configuration des secrets Notion : {e}. "
-             "Veuillez vérifier votre fichier .streamlit/secrets.toml et vous assurer que 'notion_api_key' et 'notion_database_id_ingredients' sont définis.")
+             "Veuillez vérifier votre fichier .streamlit/secrets.toml et vous assurer que 'notion_api_key', "
+             "'notion_database_id_ingredients' et 'notion_database_id_ingredients_recettes' sont définis.")
     st.stop() # Arrête l'exécution de l'application si les secrets ne sont pas configurés
 
 # --- Fonctions d'extraction de propriétés Notion ---
@@ -75,10 +78,15 @@ def extract_property_value(prop):
     elif t == "rollup":
         rollup = prop.get("rollup", {})
         if rollup.get("type") == "array":
-            return ", ".join([
-                str(item.get("plain_text", "") or item.get("number", "") or "")
-                for item in rollup.get("array", [])
-            ])
+            # Gérer les types spécifiques dans un tableau de rollup
+            extracted_items = []
+            for item in rollup.get("array", []):
+                if item.get("type") == "text":
+                    extracted_items.append(item.get("text", {}).get("plain_text", ""))
+                elif item.get("type") == "number":
+                    extracted_items.append(str(item.get("number", "")))
+                # Ajoutez d'autres types si nécessaire
+            return ", ".join(extracted_items)
         elif rollup.get("type") in ["number", "string", "boolean", "date"]:
             return str(rollup.get(rollup.get("type"), ""))
     return ""
@@ -123,7 +131,7 @@ def fetch_notion_data(database_id: str, filter_json_str: str = None, columns_map
 
             for result in page_results:
                 properties = result.get("properties", {})
-                row_data = {"Page_ID": result.get("id", "")}
+                row_data = {"Page_ID": result.get("id", "")} # L'ID de la page Notion actuelle
 
                 if columns_mapping:
                     for notion_prop, df_col in columns_mapping.items():
@@ -173,6 +181,50 @@ def get_ingredients_data():
         columns_mapping=columns_mapping
     )
 
+# Nouvelle fonction pour la base de données Ingrédients_recettes
+def get_ingredients_recettes_data():
+    filter_cond = {
+        "property": "Type de stock f",
+        "formula": {"string": {"equals": "Autre type"}}
+    }
+    columns_mapping = {
+        # 'Elément parent' est une relation. extract_property_value renverra une chaîne d'IDs.
+        # Nous la traiterons après pour obtenir le premier ID ou l'ID de la page.
+        "Elément parent": "Element_Parent_Relation_IDs",
+        "Qté/pers_s": "Qté/pers_s",
+        "Ingrédient ok": "Ingrédient ok",
+        "Type de stock f": "Type de stock f"
+    }
+
+    df = fetch_notion_data(
+        DATABASE_ID_INGREDIENTS_RECETTES,
+        filter_json_str=json.dumps(filter_cond, sort_keys=True),
+        columns_mapping=columns_mapping
+    )
+
+    if not df.empty and "Element_Parent_Relation_IDs" in df.columns:
+        # Appliquer la logique: premier ID de la relation, ou Page_ID si la relation est vide
+        df['Page_ID_Formatted'] = df.apply(
+            lambda row: row['Element_Parent_Relation_IDs'].split(',')[0].strip() if row['Element_Parent_Relation_IDs'] else row['Page_ID'],
+            axis=1
+        )
+        # Remplacer la colonne 'Page_ID' par la colonne formatée et supprimer les colonnes temporaires
+        df['Page_ID'] = df['Page_ID_Formatted']
+        df = df.drop(columns=['Page_ID_Formatted', 'Element_Parent_Relation_IDs'])
+
+        # Conversion de 'Qté/pers_s' en numérique, gérant les virgules
+        if 'Qté/pers_s' in df.columns:
+            df['Qté/pers_s'] = df['Qté/pers_s'].astype(str).str.replace(',', '.').replace('', '0').astype(float)
+            df = df[df['Qté/pers_s'] > 0] # Filtrer les lignes où la quantité est > 0
+
+    # Réorganiser les colonnes pour correspondre à l'en-tête de votre CSV initial
+    desired_columns = ["Page_ID", "Qté/pers_s", "Ingrédient ok", "Type de stock f"]
+    # S'assurer que toutes les colonnes désirées existent avant de les sélectionner
+    existing_columns = [col for col in desired_columns if col in df.columns]
+    df = df[existing_columns]
+
+    return df
+
 # --- Fonction Principale de l'Application Streamlit ---
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus Notion")
@@ -191,6 +243,8 @@ def main():
         st.session_state['df_planning'] = pd.DataFrame()
     if 'df_ingredients' not in st.session_state:
         st.session_state['df_ingredients'] = pd.DataFrame()
+    if 'df_ingredients_recettes' not in st.session_state:
+        st.session_state['df_ingredients_recettes'] = pd.DataFrame()
 
     if uploaded_planning_file is not None:
         try:
@@ -205,15 +259,13 @@ def main():
 
     # 2. Récupération des données Notion (Ingrédients)
     st.sidebar.subheader("2. Données Ingrédients (Notion)")
-    
-    # Bouton de rechargement pour les données Ingrédients
+
     if st.sidebar.button("Charger/Recharger Ingrédients", key="reload_ingredients"):
         st.session_state['df_ingredients'] = get_ingredients_data()
         if not st.session_state['df_ingredients'].empty:
             st.sidebar.success(f"Données Ingrédients (Notion) chargées ({len(st.session_state['df_ingredients'])} lignes).")
         else:
             st.sidebar.warning("Aucune donnée Ingrédients chargée depuis Notion ou erreur.")
-    # Charger au premier lancement si pas déjà en session_state
     elif st.session_state['df_ingredients'].empty:
         st.session_state['df_ingredients'] = get_ingredients_data()
         if not st.session_state['df_ingredients'].empty:
@@ -222,6 +274,24 @@ def main():
             st.sidebar.warning("Aucune donnée Ingrédients chargée depuis Notion ou erreur.")
     else:
         st.sidebar.info("Données Ingrédients déjà chargées.")
+
+    # 3. Récupération des données Notion (Ingrédients_recettes)
+    st.sidebar.subheader("3. Données Ingrédients par Recette (Notion)")
+
+    if st.sidebar.button("Charger/Recharger Ingrédients par Recette", key="reload_ingr_recettes"):
+        st.session_state['df_ingredients_recettes'] = get_ingredients_recettes_data()
+        if not st.session_state['df_ingredients_recettes'].empty:
+            st.sidebar.success(f"Données Ingrédients par Recette (Notion) chargées ({len(st.session_state['df_ingredients_recettes'])} lignes).")
+        else:
+            st.sidebar.warning("Aucune donnée Ingrédients par Recette chargée depuis Notion ou erreur.")
+    elif st.session_state['df_ingredients_recettes'].empty:
+        st.session_state['df_ingredients_recettes'] = get_ingredients_recettes_data()
+        if not st.session_state['df_ingredients_recettes'].empty:
+            st.sidebar.success(f"Données Ingrédients par Recette (Notion) chargées ({len(st.session_state['df_ingredients_recettes'])} lignes).")
+        else:
+            st.sidebar.warning("Aucune donnée Ingrédients par Recette chargée depuis Notion ou erreur.")
+    else:
+        st.sidebar.info("Données Ingrédients par Recette déjà chargées.")
 
     st.header("1. Vérification des Données Chargées")
     if not st.session_state['df_planning'].empty:
@@ -239,7 +309,15 @@ def main():
         st.write("❌ Données Ingrédients (Notion) manquantes ou non chargées.")
         st.info("Cliquez sur 'Charger/Recharger Ingrédients' dans la barre latérale pour les récupérer.")
 
-    st.info("Pour le moment, l'application se limite au chargement du Planning.csv et des Ingrédients de Notion.")
+    if not st.session_state['df_ingredients_recettes'].empty:
+        st.write("✅ Données Ingrédients par Recette (Notion) chargées.")
+        st.subheader("Aperçu de la table Ingrédients par Recette (Notion) :")
+        st.dataframe(st.session_state['df_ingredients_recettes'].head())
+    else:
+        st.write("❌ Données Ingrédients par Recette (Notion) manquantes ou non chargées.")
+        st.info("Cliquez sur 'Charger/Recharger Ingrédients par Recette' dans la barre latérale pour les récupérer.")
+
+    st.info("L'application charge maintenant le Planning.csv, les Ingrédients et les Ingrédients par Recette de Notion.")
     st.info("N'oubliez pas de configurer votre fichier `.streamlit/secrets.toml` avec les clés API et IDs de base de données nécessaires.")
 
 
