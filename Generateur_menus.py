@@ -719,16 +719,20 @@ def main():
     for file_name, uploaded_file in uploaded_files.items():
         if uploaded_file is not None:
             try:
-                # Gérer le délimiteur pour Planning.csv spécifiquement s'il y a un ';'
                 if file_name == "Planning.csv":
-                    # Tentative de lire avec le délimiteur par défaut (virgule), puis avec point-virgule
-                    uploaded_file.seek(0) # Remettre le pointeur au début du fichier
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                    if len(df.columns) == 1 and ';' in df.iloc[0, 0]: # Vérifier si c'est un CSV avec ';' comme séparateur
-                        uploaded_file.seek(0) # Remettre le pointeur au début du fichier
-                        df = pd.read_csv(uploaded_file, encoding='utf-8', sep=';')
+                    uploaded_file.seek(0)
+                    # Lire Planning.csv avec parsing de la date, délimiteur ';' et dayfirst=True pour le bon format français
+                    df = pd.read_csv(
+                        uploaded_file,
+                        encoding='utf-8',
+                        sep=';',
+                        parse_dates=['Date'],
+                        dayfirst=True
+                    )
                 else:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
+                # ...
+
 
                 # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
                 if "Temps_total" in df.columns:
