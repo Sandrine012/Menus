@@ -522,7 +522,13 @@ class MenuGenerator:
         logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         if not sorted_plats_transportables:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
-
+            
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
+            # Correction sécurité : s'assurer que date_plat_orig est bien un datetime
+            if isinstance(date_plat_orig, str):
+                date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
+            
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
             nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
@@ -631,8 +637,9 @@ class MenuGenerator:
                 # Only add to plats_transportables_semaine if the *planning itself* requested a transportable meal
                 # AND the chosen recipe is indeed transportable.
                 # This applies only to standard meals, not Repas B.
-                if participants_str != "B" and transportable_req == "oui" and self.recette_manager.est_transportable(recette_choisie_id):
+                if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
                     plats_transportables_semaine[date_repas_dt] = recette_choisie_id
+
                     logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) ajouté à plats_transportables_semaine pour le {date_repas_dt.strftime('%Y-%m-%d')}.")
                 elif participants_str != "B": # Log why it's not added if not a Repas B
                     logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) non ajouté à plats_transportables_semaine (transportable_req est '{transportable_req}' ou recette non transportable).")
