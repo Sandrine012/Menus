@@ -787,6 +787,39 @@ def main():
                 st.header("2. Menu Généré")
                 st.dataframe(df_menu_genere)
 
+                # Suppose que df_menu_genere est ton DataFrame de menu après génération
+
+                # Ajuste l'ordre et les noms des colonnes pour correspondre exactement à l’exemple CSV
+                df_export = df_menu_genere.copy()
+                
+                # Renomme ou crée les colonnes "Nom" et "Participant(s)" si nécessaire selon ton DF actuel
+                # Ici on s’assure d’avoir la bonne casse et noms
+                df_export = df_export.rename(columns={
+                    'Participant(s)': 'Participant(s)',  # adapte si tu as un nom différent
+                    COLONNE_NOM: 'Nom',
+                    'Date': 'Date'
+                })
+                
+                # Si besoin, convertit la colonne Date au format "yyyy-mm-dd HH:MM"
+                if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
+                    df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
+                df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                
+                # Filtrer les colonnes pour n’avoir que celles-ci, dans cet ordre
+                df_export = df_export[['Date', 'Participant(s)', 'Nom']]
+                
+                # Génére la chaîne CSV avec séparateur virgule, BOM UTF-8 (si nécessaire)
+                csv_data = df_export.to_csv(index=False, sep=',', encoding='utf-8-sig')
+                
+                # Bouton de téléchargement Streamlit (à placer dans ta plage de code UI)
+                st.download_button(
+                    label="📥 Télécharger le menu en CSV",
+                    data=csv_data,
+                    file_name="menu_genere.csv",
+                    mime="text/csv"
+                )
+
+
                 st.header("3. Liste de Courses (Ingrédients manquants cumulés)")
                 if liste_courses:
                     # Convertir la liste de courses formatée en un DataFrame pour l'affichage et l'export
