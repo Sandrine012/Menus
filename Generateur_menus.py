@@ -516,6 +516,16 @@ class MenuGenerator:
 
     def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
         candidats_restes_ids = []
+        print(f"--- Pool plats_transportables_semaine au {date_repas_dt.strftime('%Y-%m-%d')} avant repas B ---")
+for date_clef, recette_id in plats_transportables_semaine.items():
+    # Pour afficher la date au bon format selon son type
+    if hasattr(date_clef, 'strftime'):
+        date_str = date_clef.strftime('%Y-%m-%d')
+    else:
+        date_str = str(date_clef)
+    print(f"  {date_str} => recette id: {recette_id}")
+print("-------------------------------------")
+
         # Tri par date, le plus ancien en premier, ce qui est logique pour les restes
         sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
 
