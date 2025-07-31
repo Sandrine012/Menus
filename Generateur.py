@@ -2,529 +2,765 @@ import streamlit as st
 import pandas as pd
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from notion_client import Client
-from notion_client.helpers import get_id
+from notion_client.errors import RequestTimeoutError, APIResponseError
+import httpx
 import io
+import unicodedata # For remove_accents
+import time # For time.sleep
+import random # For random.choice
 
 # --- Configuration du logger ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Constantes ---
+# --- Constantes pour les noms de fichiers de sortie (en mémoire pour Streamlit) ---
 FICHIER_SORTIE_MENU_CSV = "Menus_generes.csv"
 FICHIER_SORTIE_LISTES_TXT = "Listes_ingredients.txt"
 
-# --- Connexion à Notion ---
-# Récupérer la clé API et les IDs des bases de données depuis les secrets Streamlit
-# Assurez-vous d'avoir un fichier .streamlit/secrets.toml dans votre repo GitHub
-# ou configuré les secrets dans Streamlit Cloud.
+# --- Paramètres Notion (récupérés via Streamlit secrets) ---
+NOTION_API_KEY = None
+DATABASE_ID_INGREDIENTS = None
+DATABASE_ID_INGREDIENTS_RECETTES = None
+DATABASE_ID_RECETTES = None
+DATABASE_ID_MENUS = None
+notion_client = None
+
 try:
     NOTION_API_KEY = st.secrets["notion_api_key"]
-    # Utilisation des noms de secrets spécifiques pour chaque base de données
-    DATABASE_ID_MENUS = st.secrets["notion_database_id_menus"]
-    DATABASE_ID_RECETTES = st.secrets["notion_database_id_recettes"]
-    DATABASE_ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
-    DATABASE_ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
+    # Utilisation des IDs hardcodés dans le script fourni comme valeurs par défaut si non trouvés dans secrets
+    DATABASE_ID_INGREDIENTS = st.secrets.get("notion_database_id_ingredients", "b23b048b67334032ac1ae4e82d308817")
+    DATABASE_ID_INGREDIENTS_RECETTES = st.secrets.get("notion_database_id_ingredients_recettes", "1d16fa46f8b2805b8377eba7bf668eb5")
+    DATABASE_ID_RECETTES = st.secrets.get("notion_database_id_recettes", "1d16fa46f8b2805b8377eba7bf668eb5") # Same as Ingredients_recettes in original code
+    DATABASE_ID_MENUS = st.secrets.get("notion_database_id_menus", "9025cfa1c18d4501a91dbeb1b10b48bd")
 
-    notion = Client(auth=NOTION_API_KEY)
-except KeyError as e:
-    st.error(f"Erreur : Le secret Notion '{e}' n'est pas configuré. "
-             "Veuillez vérifier les noms de vos secrets dans .streamlit/secrets.toml ou l'interface Streamlit Cloud.")
-    st.stop() # Arrête l'exécution de l'application si les secrets ne sont pas trouvés.
+    notion_client = Client(auth=NOTION_API_KEY)
+    st.sidebar.success("Connexion Notion configurée.")
+except KeyError:
+    st.sidebar.error("Les secrets Notion (notion_api_key et/ou les IDs de bases de données) ne sont pas configurés. "
+                     "Veuillez les ajouter dans le fichier .streamlit/secrets.toml ou via Streamlit Cloud.")
+    st.stop() # Arrête l'exécution de l'application si les secrets ne sont pas configurés.
 except Exception as e:
-    st.error(f"Erreur lors de l'initialisation du client Notion : {e}")
+    st.sidebar.error(f"Erreur lors de l'initialisation du client Notion : {e}")
     st.stop()
 
-# --- Fonctions Notion ---
-def query_database(database_id, filter_property=None, filter_value=None):
-    try:
-        if filter_property and filter_value:
-            filter_obj = {
-                "property": filter_property,
-                "text": {
-                    "contains": filter_value
-                }
-            }
-            results = notion.databases.query(database_id=database_id, filter=filter_obj).get("results")
-        else:
-            results = notion.databases.query(database_id=database_id).get("results")
-        return results
-    except Exception as e:
-        st.error(f"Erreur lors de la requête Notion sur la base {database_id}: {e}")
-        logger.error(f"Erreur lors de la requête Notion sur la base {database_id}: {e}")
-        return []
-
-def get_page_properties(page):
-    properties = {}
-    for prop_name, prop_data in page["properties"].items():
-        if prop_data["type"] == "title":
-            properties[prop_name] = prop_data["title"][0]["plain_text"] if prop_data["title"] else ""
-        elif prop_data["type"] == "rich_text":
-            properties[prop_name] = prop_data["rich_text"][0]["plain_text"] if prop_data["rich_text"] else ""
-        elif prop_data["type"] == "multi_select":
-            properties[prop_name] = [item["name"] for item in prop_data["multi_select"]]
-        elif prop_data["type"] == "select":
-            properties[prop_name] = prop_data["select"]["name"] if prop_data["select"] else ""
-        elif prop_data["type"] == "number":
-            properties[prop_name] = prop_data["number"]
-        elif prop_data["type"] == "checkbox":
-            properties[prop_name] = prop_data["checkbox"]
-        elif prop_data["type"] == "date":
-            properties[prop_name] = prop_data["date"]["start"] if prop_data["date"] else ""
-        elif prop_data["type"] == "url":
-            properties[prop_name] = prop_data["url"]
-        elif prop_data["type"] == "relation":
-            # Pour les relations, nous récupérons les IDs. Il faudra ensuite les mapper aux noms si nécessaire.
-            properties[prop_name] = [item["id"] for item in prop_data["relation"]]
-        elif prop_data["type"] == "formula":
-            if prop_data["formula"]["type"] == "string":
-                properties[prop_name] = prop_data["formula"]["string"]
-            elif prop_data["formula"]["type"] == "number":
-                properties[prop_name] = prop_data["formula"]["number"]
-            elif prop_data["formula"]["type"] == "boolean":
-                properties[prop_name] = prop_data["formula"]["boolean"]
-            elif prop_data["formula"]["type"] == "date":
-                properties[prop_name] = prop_data["formula"]["date"]["start"] if prop_data["formula"]["date"] else ""
-            else:
-                properties[prop_name] = None # Gérer d'autres types de formules si besoin
-        else:
-            properties[prop_name] = None
-    return properties
-
-def create_page(database_id, properties):
-    try:
-        new_page = notion.pages.create(parent={"database_id": database_id}, properties=properties)
-        return new_page
-    except Exception as e:
-        st.error(f"Erreur lors de la création d'une page dans Notion: {e}")
-        logger.error(f"Erreur lors de la création d'une page dans Notion: {e}")
-        return None
-
-def update_page_property(page_id, property_name, property_type, value):
-    try:
-        properties = {}
-        if property_type == "rich_text":
-            properties[property_name] = {"rich_text": [{"text": {"content": value}}]}
-        elif property_type == "date":
-            properties[property_name] = {"date": {"start": value}}
-        elif property_type == "select":
-            properties[property_name] = {"select": {"name": value}}
-        elif property_type == "relation":
-            properties[property_name] = {"relation": [{"id": item_id} for item_id in value]}
-        elif property_type == "number":
-            properties[property_name] = {"number": value}
-        elif property_type == "checkbox":
-            properties[property_name] = {"checkbox": value}
-        else:
-            st.warning(f"Type de propriété non géré pour la mise à jour : {property_type}")
-            return False
-
-        notion.pages.update(page_id=page_id, properties=properties)
-        return True
-    except Exception as e:
-        st.error(f"Erreur lors de la mise à jour de la propriété '{property_name}' de la page {page_id}: {e}")
-        logger.error(f"Erreur lors de la mise à jour de la propriété '{property_name}' de la page {page_id}: {e}")
-        return False
-
-def get_page_id_by_name(database_id, page_name_property, page_name):
-    """
-    Recherche l'ID d'une page Notion par le nom de sa propriété de titre.
-    page_name_property doit être le nom de la colonne Notion qui est le "Titre".
-    """
-    try:
-        results = notion.databases.query(
-            database_id=database_id,
-            filter={
-                "property": page_name_property,
-                "title": { # Le type de la propriété de titre est 'title'
-                    "equals": page_name
-                }
-            }
-        ).get("results")
-        if results:
-            return results[0]["id"]
-        return None
-    except Exception as e:
-        st.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}' dans la base {database_id}: {e}")
-        logger.error(f"Erreur lors de la recherche de l'ID de la page '{page_name}' dans la base {database_id}: {e}")
-        return None
-
-# --- Fonctions de traitement des données ---
-def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recettes, id_to_name_map):
-    st.info("Traitement des données en cours...")
-    logger.info("Début du traitement des données.")
-
-    # Nettoyage des noms de colonnes : suppression des espaces superflus et caractères spéciaux
-    # Ceci est important car les noms de colonnes Notion peuvent contenir des espaces/caractères spéciaux.
-    # Assurez-vous que les DataFrames Notion ont déjà été renommés pour correspondre à cette logique.
-    df_planning.columns = [col.strip().replace(" ", "_").replace("(", "").replace(")", "").replace("é", "e").replace("à", "a").replace("ç", "c").lower() for col in df_planning.columns]
-    # Les autres DataFrames (recettes, ingredients, ingredients_recettes) devraient déjà avoir des noms de colonnes cohérents
-    # après la conversion depuis Notion et le renommage dans la fonction load_data_from_notion.
-
-    df_planning['date'] = pd.to_datetime(df_planning['date'], format='%d/%m/%Y')
-    df_planning.set_index('date', inplace=True)
-
-    # Assurez-vous que df_recettes a une colonne 'nom' et 'participants'
-    if 'nom' not in df_recettes.columns or 'participants' not in df_recettes.columns:
-        st.error("Le DataFrame des recettes de Notion ne contient pas les colonnes 'nom' ou 'participants' requises.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame() # Retourne des DFs vides pour éviter des erreurs
-
-    df_recettes['nom'] = df_recettes['nom'].str.strip()
-
-    # Assurez-vous que df_ingredients_recettes a une colonne 'recette_nom', 'ingredient_nom', 'quantite', 'unite'
-    if 'recette_nom' not in df_ingredients_recettes.columns or \
-       'ingredient_nom' not in df_ingredients_recettes.columns or \
-       'quantite' not in df_ingredients_recettes.columns or \
-       'unite' not in df_ingredients_recettes.columns:
-        st.error("Le DataFrame des ingrédients par recette de Notion ne contient pas les colonnes requises ('recette_nom', 'ingredient_nom', 'quantite', 'unite').")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    df_ingredients_recettes['recette_nom'] = df_ingredients_recettes['recette_nom'].str.strip()
-    df_ingredients_recettes['ingredient_nom'] = df_ingredients_recettes['ingredient_nom'].str.strip()
+# --- Fonctions d'aide pour l'extraction de propriétés Notion ---
+def extract_property_value(prop_data, notion_prop_name_for_log=None, expected_format_key=None):
+    if not isinstance(prop_data, dict):
+        return ""
+    
+    # Generic extraction based on type
+    t = prop_data.get("type")
+    if t == "title":
+        return "".join([text.get("plain_text", "") for text in prop_data.get("title", [])])
+    elif t == "rich_text":
+        return "".join([text.get("plain_text", "") for text in prop_data.get("rich_text", [])])
+    elif t == "multi_select":
+        return ", ".join([opt.get("name", "") for opt in prop_data.get("multi_select", [])])
+    elif t == "select":
+        select_obj = prop_data.get("select")
+        if select_obj is not None:
+            return select_obj.get("name", "")
+        return ""
+    elif t == "number":
+        num_val = prop_data.get("number")
+        return str(num_val) if num_val is not None else ""
+    elif t == "checkbox":
+        return str(prop_data.get("checkbox", ""))
+    elif t == "date":
+        date_obj = prop_data.get("date")
+        if date_obj is not None:
+            return date_obj.get("start", "")
+        return ""
+    elif t == "people":
+        return ", ".join([person.get("name", "") for person in prop_data.get("people", [])])
+    elif t == "relation":
+        # For relations, typically we want the ID. This is a common extraction.
+        return ", ".join([rel.get("id", "") for rel in prop_data.get("relation", [])])
+    elif t == "url":
+        return prop_data.get("url", "")
+    elif t == "email":
+        return prop_data.get("email", "")
+    elif t == "phone_number":
+        return prop_data.get("phone_number", "")
+    elif t == "formula":
+        formula = prop_data.get("formula", {})
+        if formula.get("type") == "string":
+            return formula.get("string", "")
+        elif formula.get("type") == "number":
+            num_val = formula.get("number")
+            return str(num_val) if num_val is not None else ""
+        elif formula.get("type") == "boolean":
+            return str(formula.get("boolean", ""))
+    elif t == "rollup":
+        rollup = prop_data.get("rollup", {})
+        if rollup.get("type") == "array":
+            # Attempt to extract text or number from array items
+            values = []
+            for item in rollup.get("array", []):
+                if item.get("type") == "rich_text":
+                    values.append("".join(t.get("plain_text", "") for t in item.get("rich_text", [])))
+                elif item.get("type") == "title":
+                    values.append("".join(t.get("plain_text", "") for t in item.get("title", [])))
+                elif item.get("type") == "number":
+                    values.append(str(item.get("number", "")))
+                elif item.get("type") == "formula":
+                    f_val = item.get("formula", {})
+                    if f_val.get("type") == "string": values.append(f_val.get("string", ""))
+                    elif f_val.get("type") == "number": values.append(str(f_val.get("number", "")))
+            return ", ".join(filter(None, values))
+        elif rollup.get("type") in ["number", "string"]: # Single value rollup
+            val = rollup.get(rollup.get("type"))
+            return str(val) if val is not None else ""
+    elif t == "unique_id":
+        uid = prop_data.get("unique_id", {}); p, n = uid.get("prefix"), uid.get("number")
+        return f"{p}-{n}" if p and n is not None else (str(n) if n is not None else "")
+    return ""
 
 
-    # Assurez-vous que df_ingredients a une colonne 'nom' et 'quantite_stock' (optionnel)
-    if 'nom' not in df_ingredients.columns:
-        st.error("Le DataFrame des ingrédients de Notion ne contient pas la colonne 'nom' requise.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+# --- Fonctions d'extraction des données Notion ---
+@st.cache_data(ttl=3600) # Cache les données pendant 1 heure
+def fetch_notion_data(database_id, filter_conditions=None, csv_header_map=None, custom_extract_logic=None):
+    all_rows = []
+    next_cursor = None
+    total_extracted = 0
+    batch_size = 50 # Increased batch size
+    api_timeout_seconds = 180
+    max_retries = 7
+    retry_delay_initial = 5
+    retries = 0
 
-    df_ingredients['nom'] = df_ingredients['nom'].str.strip()
+    if csv_header_map is None:
+        st.error("L'en-tête CSV et le mapping des propriétés Notion sont requis.")
+        return pd.DataFrame()
 
-    # Fusion des dataframes
-    df_menus = df_planning.stack().reset_index()
-    df_menus.columns = ['date', 'repas_type', 'recette_nom']
-    df_menus['date'] = df_menus['date'].dt.strftime('%d/%m/%Y')
+    with st.spinner(f"Extraction des données depuis Notion (DB ID: {database_id})..."):
+        try:
+            while True:
+                try:
+                    query_params = {"database_id": database_id, "page_size": batch_size}
+                    if filter_conditions:
+                        query_params["filter"] = filter_conditions
+                    if next_cursor:
+                        query_params["start_cursor"] = next_cursor
 
-    # Remplacer les valeurs vides ou "None" par une chaîne vide
-    df_menus['recette_nom'] = df_menus['recette_nom'].fillna('').astype(str).str.strip()
+                    results = notion_client.databases.query(**query_params, timeout=api_timeout_seconds)
+                    page_results = results.get("results", [])
+                    retries = 0 # Reset retries on success
 
-    # Nettoyer les noms des colonnes 'repas_type' pour correspondre aux propriétés Notion
-    df_menus['repas_type'] = df_menus['repas_type'].str.replace('_', ' ').str.title()
-    df_menus['repas_type'] = df_menus['repas_type'].replace({
-        'Dejeuner': 'Déjeuner',
-        'Diner': 'Dîner'
-    })
+                    if not page_results:
+                        logger.info("Aucun résultat retourné par l'API ou fin de la base de données atteinte.")
+                        break
 
-    df_menus_complet = pd.merge(df_menus, df_recettes, left_on='recette_nom', right_on='nom', how='left')
-    df_menus_complet.rename(columns={'nom': 'Nom Recette', 'participants': 'Participant(s)'}, inplace=True)
+                    for result in page_results:
+                        row_values = []
+                        properties = result.get("properties", {})
+                        for csv_col, (notion_prop_key, expected_type_hint) in csv_header_map.items():
+                            if csv_col == "Page_ID":
+                                row_values.append(result.get("id", ""))
+                            else:
+                                raw_prop_data = properties.get(notion_prop_key)
+                                if raw_prop_data is None and notion_prop_key is not None:
+                                    logger.warning(f"Propriété Notion '{notion_prop_key}' (pour CSV '{csv_col}') non trouvée dans la page ID {result.get('id')}. Clés dispo: {list(properties.keys())}")
+                                
+                                # Use custom extraction logic if provided for specific columns, otherwise generic
+                                if custom_extract_logic and notion_prop_key in custom_extract_logic:
+                                    value = custom_extract_logic[notion_prop_key](raw_prop_data)
+                                else:
+                                    value = extract_property_value(raw_prop_data)
+                                
+                                row_values.append(value)
+                        all_rows.append(row_values)
+                        total_extracted += 1
 
-    # Récupérer l'ID de la recette pour la relation Notion, en utilisant le mapping ID->Nom
-    # Note: DATABASE_ID_RECETTES est la base des recettes où se trouve le nom.
-    df_menus_complet['Recette ID'] = df_menus_complet['recette_nom'].apply(
-        lambda x: get_page_id_by_name(DATABASE_ID_RECETTES, "Nom", x) if x else None
-    )
+                    next_cursor = results.get("next_cursor")
+                    if not next_cursor:
+                        break
+                    st.sidebar.text(f"  Pages extraites: {total_extracted}...")
+                    time.sleep(0.1) # Shorter pause for faster extraction but still avoid rate limiting
 
-    st.success("Traitement des données terminé.")
-    logger.info("Fin du traitement des données.")
+                except (httpx.TimeoutException, RequestTimeoutError) as e:
+                    retries += 1
+                    logger.warning(f"Timeout API (tentative {retries}/{max_retries}). Attente {retry_delay_initial}s...")
+                    if retries >= max_retries:
+                        st.error(f"Nombre maximum de tentatives atteint après Timeout. Abandon de l'extraction de la base {database_id}.")
+                        break
+                    time.sleep(retry_delay_initial)
+                    retry_delay_initial = min(retry_delay_initial * 2, 60) # Exponential backoff
+                    continue # Try fetching the same page again
+                except APIResponseError as e:
+                    logger.error(f"Erreur API Notion pour la base {database_id}: {e.code} - {e.message}.")
+                    if e.code in ["validation_error", "unauthorized", "restricted_resource"]:
+                        st.error(f"Erreur API non récupérable pour la base {database_id}. Veuillez vérifier les permissions ou l'ID de la base de données.")
+                        break
+                    retries += 1
+                    if retries >= max_retries:
+                        st.error(f"Nombre maximum d'erreurs API atteint pour la base {database_id}. Abandon.")
+                        break
+                    time.sleep(retry_delay_initial)
+                    retry_delay_initial = min(retry_delay_initial * 2, 60)
+                    continue
+                except Exception as e:
+                    st.error(f"Une erreur inattendue est survenue lors de l'extraction de Notion pour la base {database_id}: {e}")
+                    logger.exception(f"Erreur inattendue lors de l'extraction de Notion pour la base {database_id}")
+                    break
 
-    return df_menus_complet, df_ingredients, df_ingredients_recettes
+        except Exception as e:
+            st.error(f"Erreur générale lors de la préparation de l'extraction Notion pour la base {database_id}: {e}")
+            logger.exception(f"Erreur générale lors de la préparation de l'extraction Notion pour la base {database_id}")
 
-def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recettes):
-    st.info("Génération des fichiers de sortie en cours...")
-    logger.info("Début de la génération des fichiers de sortie.")
+    if not all_rows:
+        st.warning(f"Aucune donnée extraite de la base de données Notion ID: {database_id}. Vérifiez les filtres ou les permissions.")
+        return pd.DataFrame(columns=[col for col, _ in csv_header_map.items()])
 
-    # Préparation du DataFrame pour l'export CSV
-    df_menu_genere = df_menus_complet[['date', 'Participant(s)', 'recette_nom']].copy()
-    df_menu_genere.rename(columns={'date': 'Date', 'recette_nom': 'Nom'}, inplace=True)
+    df = pd.DataFrame(all_rows, columns=[col for col, _ in csv_header_map.items()])
+    st.success(f"Extraction terminée : {len(df)} lignes de la base de données Notion (ID: {database_id}).")
+    return df
 
-    # Formater les dates pour Notion au format YYYY-MM-DD HH:MM
-    df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+# --- Specific fetch functions using the generic one ---
 
-    # Exporter en CSV pour téléchargement
-    csv_buffer = io.StringIO()
-    df_menu_genere.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
-    csv_data = csv_buffer.getvalue().encode("utf-8-sig")
-    st.download_button(
-        label="Télécharger Menus_generes.csv",
-        data=csv_data,
-        file_name=FICHIER_SORTIE_MENU_CSV,
-        mime="text/csv",
-    )
-    logger.info(f"Fichier CSV '{FICHIER_SORTIE_MENU_CSV}' prêt pour téléchargement.")
+def fetch_ingredients_data():
+    csv_to_notion_mapping = {
+        "Page_ID": (None, "page_id_special"),
+        "Nom": ("Nom", "title"),
+        "Type de stock": ("Type de stock", "select"),
+        "unité": ("unité", "rich_text"),
+        "Qte reste": ("Qte reste", "number")
+    }
+    filter_cond = {
+        "property": "Type de stock",
+        "select": {"equals": "Autre type"}
+    }
+    return fetch_notion_data(DATABASE_ID_INGREDIENTS, filter_cond, csv_to_notion_mapping)
 
-    # Génération du récapitulatif des ingrédients
-    # Assurez-vous que 'ingredient_nom' et 'recette_nom' sont les noms de colonnes après le traitement Notion
-    df_details_ingredients = pd.merge(df_menus_complet, df_ingredients_recettes, left_on='recette_nom', right_on='recette_nom', how='inner')
-    df_details_ingredients = pd.merge(df_details_ingredients, df_ingredients, left_on='ingredient_nom', right_on='nom', how='inner', suffixes=('_recette', '_stock'))
+def fetch_ingredients_recettes_data():
+    csv_to_notion_mapping = {
+        "Page_ID": (None, "page_id_special"),
+        "Qté/pers_s": ("Qté/pers_s", "rich_text"),
+        "Ingrédient ok": ("Ingrédient ok", "title"),
+        "Type de stock f": ("Type de stock f", "formula"),
+        "Elément parent": ("Elément parent", "relation")
+    }
 
-    df_details_ingredients['quantite'] = pd.to_numeric(df_details_ingredients['quantite'], errors='coerce').fillna(0)
+    # Custom extraction logic for specific columns
+    custom_extract_logic = {
+        "Elément parent": lambda prop_data: ", ".join([rel.get("id", "") for rel in prop_data.get("relation", [])]) if prop_data and prop_data.get("type") == "relation" else "",
+        "Qté/pers_s": lambda prop_data: str(extract_property_value(prop_data)).replace(",", ".") if prop_data else "",
+        "Type de stock f": lambda prop_data: extract_property_value(prop_data) # Formula string
+    }
 
-    # Calcul des quantités totales par ingrédient et unité
-    # Les colonnes 'ingredient' et 'unite' doivent être présentes dans df_details_ingredients
-    # Si 'unite' vient de df_ingredients_recettes, assurez-vous de la conserver.
-    liste_courses = df_details_ingredients.groupby(['ingredient_nom', 'unite_recette'])['quantite'].sum().reset_index()
-    liste_courses.rename(columns={'ingredient_nom': 'ingredient', 'unite_recette': 'unite'}, inplace=True) # Renommer pour la sortie
+    filter_cond = {
+        "property": "Type de stock f",
+        "formula": {"string": {"equals": "Autre type"}}
+    }
+    df = fetch_notion_data(DATABASE_ID_INGREDIENTS_RECETTES, filter_cond, csv_to_notion_mapping, custom_extract_logic)
 
-    # Comparaison avec le stock (si la colonne 'quantite_stock' existe et est numérique dans df_ingredients)
-    if 'quantite_stock' in df_ingredients.columns:
-        df_ingredients['quantite_stock'] = pd.to_numeric(df_ingredients['quantite_stock'], errors='coerce').fillna(0)
-        liste_courses = pd.merge(liste_courses, df_ingredients[['nom', 'quantite_stock']], left_on='ingredient', right_on='nom', how='left').drop(columns='nom')
-        liste_courses['A acheter'] = liste_courses['quantite'] - liste_courses['quantite_stock']
-        liste_courses['A acheter'] = liste_courses['A acheter'].apply(lambda x: max(0, x)) # Ne pas afficher de quantités négatives
-
-        # Filtre pour n'afficher que ce qui est à acheter
-        liste_courses = liste_courses[liste_courses['A acheter'] > 0]
-        st.subheader("Liste de courses (éléments à acheter) :")
-        contenu_fichier_recap_txt = ["Liste de courses (éléments à acheter) :\n"]
-        if not liste_courses.empty:
-            for _, row in liste_courses.iterrows():
-                line = f"- {row['A acheter']:.2f} {row['unite']} de {row['ingredient']}\n"
-                contenu_fichier_recap_txt.append(line)
-                st.write(line.strip()) # Afficher aussi dans l'app
-        else:
-            st.info("Rien à acheter, votre stock est suffisant !")
-            contenu_fichier_recap_txt.append("Rien à acheter, votre stock est suffisant !\n")
-    else:
-        st.subheader("Récapitulatif des ingrédients requis (sans comparaison de stock) :")
-        contenu_fichier_recap_txt = ["Récapitulatif des ingrédients requis :\n"]
-        if not liste_courses.empty:
-            for _, row in liste_courses.iterrows():
-                line = f"- {row['quantite']:.2f} {row['unite']} de {row['ingredient']}\n"
-                contenu_fichier_recap_txt.append(line)
-                st.write(line.strip()) # Afficher aussi dans l'app
-        else:
-            st.info("Aucun ingrédient requis pour les menus planifiés.")
-            contenu_fichier_recap_txt.append("Aucun ingrédient requis pour les menus planifiés.\n")
-
-    txt_buffer = io.StringIO()
-    txt_buffer.writelines(contenu_fichier_recap_txt)
-    txt_data = txt_buffer.getvalue().encode("utf-8")
-    st.download_button(
-        label="Télécharger Liste_ingredients.txt",
-        data=txt_data,
-        file_name=FICHIER_SORTIE_LISTES_TXT,
-        mime="text/plain",
-    )
-    logger.info(f"Fichier TXT '{FICHIER_SORTIE_LISTES_TXT}' prêt pour téléchargement.")
-    st.success("Génération des fichiers de sortie terminée.")
-
-
-# --- Fonction d'intégration Notion ---
-def integrate_with_notion(df_menus_complet, database_id_menus, id_to_name_map):
-    st.info("Intégration avec Notion en cours...")
-    logger.info("Début de l'intégration avec Notion.")
-
-    # Filtrer les lignes qui n'ont pas de recette_nom vide
-    df_to_integrate = df_menus_complet[df_menus_complet['recette_nom'] != ''].copy()
-
-    if df_to_integrate.empty:
-        st.warning("Aucun menu valide à intégrer dans Notion.")
-        logger.warning("Aucun menu valide à intégrer dans Notion.")
-        return
-
-    # Pré-charger les IDs des recettes pour éviter des requêtes répétées dans la boucle
-    # Cette information est déjà dans df_menus_complet['Recette ID']
-    # Vous pouvez améliorer cela en faisant un mapping de tous les noms de recettes uniques vers leurs IDs une seule fois.
-    # Pour l'instant, on se base sur la colonne 'Recette ID' déjà calculée.
+    # Post-processing for 'Elément parent' to match original script's logic
+    if not df.empty and "Elément parent" in df.columns:
+        df["Qté/pers_s"] = pd.to_numeric(df["Qté/pers_s"], errors='coerce')
+        df = df[df["Qté/pers_s"] > 0].copy() # Use .copy() to avoid SettingWithCopyWarning
+        df.rename(columns={"Elément parent": "Page_ID_Recette"}, inplace=True)
+        if "Page_ID" in df.columns: # Drop Notion Page_ID as it's not the relation ID
+            df.drop(columns=["Page_ID"], inplace=True)
+    return df
 
 
-    for index, row in df_to_integrate.iterrows():
-        date_str = row['date'] # Format DD/MM/YYYY
-        repas_type = row['repas_type'] # Déjeuner, Dîner, Petit-déjeuner, Goûter
-        recette_nom = row['recette_nom']
-        participants = row['Participant(s)']
-        recette_notion_id = row['Recette ID'] # L'ID de la page de la recette dans Notion
+def fetch_recettes_data(saison_filtre):
+    csv_to_notion_mapping = {
+        "Page_ID":              (None, "page_id_special"),
+        "Nom":                  ("Nom_plat", "title"),
+        "ID_Recette":           ("ID_Recette", "unique_id"), # Changed to unique_id
+        "Saison":               ("Saison", "multi_select"),
+        "Calories":             ("Calories Recette", "rollup"),
+        "Proteines":            ("Proteines Recette", "rollup"),
+        "Temps_total":          ("Temps_total", "formula"),
+        "Aime_pas_princip":     ("Aime_pas_princip", "rollup"),
+        "Type_plat":            ("Type_plat", "multi_select"),
+        "Transportable":        ("Transportable", "select")
+    }
 
-        # Propriétés de la nouvelle page de menu
-        properties = {
-            "Date": {
-                "date": {
-                    "start": datetime.strptime(date_str, '%d/%m/%Y').isoformat() # Convertir en format ISO 8601
-                }
-            },
-            "Repas": {
-                "select": {
-                    "name": repas_type
-                }
-            },
-            "Nom": { # C'est le titre de la page de menu dans la base "Planning Menus"
-                "title": [
-                    {
-                        "text": {
-                            "content": f"{repas_type} - {recette_nom} ({date_str})"
-                        }
-                    }
-                ]
-            },
-            "Participant(s)": {
-                "rich_text": [
-                    {
-                        "text": {
-                            "content": str(participants)
-                        }
-                    }
-                ]
-            }
+    # Custom extraction logic for Recettes as needed
+    custom_extract_logic = {
+        "ID_Recette": lambda prop_data: extract_property_value(prop_data), # Uses the generic unique_id logic
+        "Calories": lambda prop_data: extract_property_value(prop_data), # Generic rollup number/array
+        "Proteines": lambda prop_data: extract_property_value(prop_data), # Generic rollup number/array
+        "Temps_total": lambda prop_data: extract_property_value(prop_data), # Generic formula
+        "Aime_pas_princip": lambda prop_data: extract_property_value(prop_data), # Generic rollup array
+        "Transportable": lambda prop_data: "Oui" if extract_property_value(prop_data).lower() == "oui" else "", # Specific for "Oui" checkbox/select
+    }
+
+    filter_conditions = [
+        {"property": "Elément parent", "relation": {"is_empty": True}}, # Filter out sub-recipes
+        {
+            "or": [
+                {"property": "Saison", "multi_select": {"contains": "Toute l'année"}},
+                *([{"property": "Saison", "multi_select": {"contains": saison_filtre}}] if saison_filtre else []),
+                {"property": "Saison", "multi_select": {"is_empty": True}} # Include recipes with no season specified
+            ]
+        },
+        {
+            "or": [
+                {"property": "Type_plat", "multi_select": {"contains": "Salade"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Soupe"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
+            ]
         }
+    ]
+    filter_recettes_notion = {"and": filter_conditions}
+    return fetch_notion_data(DATABASE_ID_RECETTES, filter_recettes_notion, csv_to_notion_mapping, custom_extract_logic)
 
-        # Ajouter la relation à la recette si l'ID est trouvé
-        if recette_notion_id:
-            # "Recette" doit être le nom de la propriété de relation dans votre base "Planning Menus"
-            properties["Recette"] = {
-                "relation": [{"id": recette_notion_id}]
-            }
-        else:
-            st.warning(f"Impossible de lier la recette '{recette_nom}' pour le {repas_type} du {date_str} car son ID n'a pas été trouvé dans Notion.")
+def fetch_menus_data():
+    csv_to_notion_mapping = {
+        "Nom Menu": ("Nom Menu", "title"),
+        "Recette": ("Recette", "relation"),
+        "Date": ("Date", "date")
+    }
 
+    custom_extract_logic = {
+        "Recette": lambda prop_data: ", ".join([relation["id"] for relation in prop_data["relation"]]) if prop_data and prop_data.get("type") == "relation" else "",
+        "Date": lambda prop_data: datetime.fromisoformat(prop_data["date"]["start"].replace('Z', '+00:00')).strftime('%Y-%m-%d') if prop_data and prop_data.get("type") == "date" and prop_data["date"].get("start") else ""
+    }
 
-        # Vérifier si la page existe déjà pour éviter les doublons
-        # On suppose que le titre "Nom" est unique pour un même jour et repas
-        existing_page_id = get_page_id_by_name(database_id_menus, "Nom", properties["Nom"]["title"][0]["text"]["content"])
-
-        if existing_page_id:
-            st.info(f"La page pour '{repas_type} - {recette_nom} ({date_str})' existe déjà. Ignorée (ou mise à jour si vous implémentez la logique).")
-            # Si vous voulez mettre à jour, décommentez et adaptez :
-            # update_page_property(existing_page_id, "Participant(s)", "rich_text", str(participants))
-        else:
-            st.info(f"Création de la page pour '{repas_type} - {recette_nom} ({date_str})'...")
-            create_page(database_id_menus, properties)
-    st.success("Intégration avec Notion terminée.")
-    logger.info("Fin de l'intégration avec Notion.")
+    filter_cond = {
+        "and": [
+            {"property": "Recette", "relation": {"is_not_empty": True}},
+        ]
+    }
+    return fetch_notion_data(DATABASE_ID_MENUS, filter_cond, csv_to_notion_mapping, custom_extract_logic)
 
 
-def load_data_from_notion():
-    """Charge les données des recettes, ingrédients et ingrédients_recettes depuis Notion."""
-    st.info("Chargement des données de Recettes, Ingrédients et Relations depuis Notion...")
-    df_recettes = pd.DataFrame()
-    df_ingredients = pd.DataFrame()
-    df_ingredients_recettes = pd.DataFrame()
-    id_to_name_map = {} # Pour mapper les IDs aux noms, utile pour les relations
+# --- Fonctions de traitement des données (adaptées du script fourni) ---
+def remove_accents(input_str):
+    if not isinstance(input_str, str):
+        return input_str
+    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
-    try:
-        # --- Récupération des Recettes ---
-        recettes_pages = query_database(DATABASE_ID_RECETTES)
-        data_recettes = [get_page_properties(page) for page in recettes_pages]
-        df_recettes = pd.DataFrame(data_recettes)
+def clean_column_names(df):
+    new_columns = {}
+    for col in df.columns:
+        cleaned_col = remove_accents(col.lower())
+        # Replace spaces and special characters with underscore, then remove repeated underscores
+        cleaned_col = re.sub(r'[^a-z0-9_]+', '', cleaned_col.replace(' ', '_'))
+        new_columns[col] = cleaned_col
+    return df.rename(columns=new_columns)
 
-        # Vérification et renommage des colonnes pour correspondre à la logique 'nom', 'participants'
-        if 'Nom' in df_recettes.columns and 'Participant(s)' in df_recettes.columns:
-            df_recettes.rename(columns={'Nom': 'nom', 'Participant(s)': 'participants'}, inplace=True)
-            # Construire un mapping ID -> Nom pour les recettes
-            for page in recettes_pages:
-                recette_id = page['id']
-                recette_name = get_page_properties(page).get('Nom') # Assurez-vous que c'est bien 'Nom'
-                if recette_name:
-                    id_to_name_map[recette_id] = recette_name
-            st.success(f"{len(df_recettes)} recettes chargées depuis Notion.")
-        else:
-            st.warning("Colonnes 'Nom' ou 'Participant(s)' manquantes dans la base de données Recettes Notion. Veuillez vérifier.")
-            df_recettes = pd.DataFrame(columns=['nom', 'participants'])
+def process_data(df_planning, df_recettes_raw, df_ingredients_raw, df_ingredients_recettes_raw, df_menus_historique_notion, nb_jours_anti_repetition=42):
+    st.info("Nettoyage et préparation des données...")
 
-        # --- Récupération des Ingrédients ---
-        ingredients_pages = query_database(DATABASE_ID_INGREDIENTS)
-        data_ingredients = [get_page_properties(page) for page in ingredients_pages]
-        df_ingredients = pd.DataFrame(data_ingredients)
+    # Assurez-vous que les DataFrames ne sont pas vides
+    if df_planning.empty or df_recettes_raw.empty or df_ingredients_raw.empty or df_ingredients_recettes_raw.empty:
+        st.error("Un ou plusieurs DataFrames d'entrée sont vides. Vérifiez le chargement des fichiers ou l'extraction Notion.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-        # Vérification et renommage des colonnes pour correspondre à 'nom', 'quantite_stock', 'unite'
-        # Assurez-vous que 'Nom' est le titre, 'Unité' et 'Quantité en Stock' sont les noms réels dans Notion.
-        if 'Nom' in df_ingredients.columns and 'Unité' in df_ingredients.columns and 'Quantité en Stock' in df_ingredients.columns:
-            df_ingredients.rename(columns={'Nom': 'nom', 'Unité': 'unite', 'Quantité en Stock': 'quantite_stock'}, inplace=True)
-            # Construire un mapping ID -> Nom pour les ingrédients
-            for page in ingredients_pages:
-                ingredient_id = page['id']
-                ingredient_name = get_page_properties(page).get('Nom')
-                if ingredient_name:
-                    id_to_name_map[ingredient_id] = ingredient_name
-            st.success(f"{len(df_ingredients)} ingrédients chargés depuis Notion.")
-        else:
-            st.warning("Colonnes 'Nom', 'Unité' ou 'Quantité en Stock' manquantes dans la base de données Ingrédients Notion. Veuillez vérifier.")
-            df_ingredients = pd.DataFrame(columns=['nom', 'unite', 'quantite_stock'])
+    # Nettoyage des noms de colonnes pour tous les DataFrames
+    df_planning = clean_column_names(df_planning)
+    df_recettes = clean_column_names(df_recettes_raw)
+    df_ingredients = clean_column_names(df_ingredients_raw)
+    df_ingredients_recettes = clean_column_names(df_ingredients_recettes_raw)
 
-        # --- Récupération des relations Ingrédients_recettes ---
-        ingredients_recettes_pages = query_database(DATABASE_ID_INGREDIENTS_RECETTES)
-        data_ingredients_recettes = []
+    # Assurer que les colonnes nécessaires existent après le nettoyage
+    required_planning_cols = ['date', 'repas_type', 'participant_s_'] # 'participant_s_' for 'Participant(s)'
+    for col in required_planning_cols:
+        if col not in df_planning.columns:
+            st.error(f"La colonne '{col}' est manquante dans le fichier Planning.csv après nettoyage. Colonnes trouvées: {df_planning.columns.tolist()}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-        # Pour chaque entrée dans la base Ingredients_recettes, nous devons résoudre les relations (IDs vers noms)
-        for page in ingredients_recettes_pages:
-            props = get_page_properties(page)
-            recette_ids = props.get('Recette', []) # Le nom de la propriété de relation vers les recettes
-            ingredient_ids = props.get('Ingrédient', []) # Le nom de la propriété de relation vers les ingrédients
-            quantite = props.get('Quantité') # Le nom de la propriété numérique pour la quantité
-            unite = props.get('Unité') # Le nom de la propriété de sélection ou texte pour l'unité
+    required_recettes_cols = ['page_id', 'nom', 'type_plat', 'saison']
+    for col in required_recettes_cols:
+        if col not in df_recettes.columns:
+            st.error(f"La colonne '{col}' est manquante dans les données Recettes après nettoyage. Colonnes trouvées: {df_recettes.columns.tolist()}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-            # Assurez-vous que les colonnes 'Recette', 'Ingrédient', 'Quantité', 'Unité' existent et sont de type correct dans votre base Notion 'Ingredients_recettes'
-            if recette_ids and ingredient_ids and quantite is not None and unite is not None:
-                for r_id in recette_ids:
-                    recette_name = id_to_name_map.get(r_id)
-                    for i_id in ingredient_ids:
-                        ingredient_name = id_to_name_map.get(i_id)
-                        if recette_name and ingredient_name:
-                            data_ingredients_recettes.append({
-                                'recette_nom': recette_name,
-                                'ingredient_nom': ingredient_name,
-                                'quantite': quantite,
-                                'unite': unite
-                            })
-        df_ingredients_recettes = pd.DataFrame(data_ingredients_recettes)
-        st.success(f"{len(df_ingredients_recettes)} relations ingrédients-recettes chargées depuis Notion.")
+    required_ingredients_cols = ['page_id', 'nom', 'type_de_stock', 'qte_reste', 'unite']
+    for col in required_ingredients_cols:
+        if col not in df_ingredients.columns:
+            st.error(f"La colonne '{col}' est manquante dans les données Ingrédients après nettoyage. Colonnes trouvées: {df_ingredients.columns.tolist()}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    except Exception as e:
-        st.error(f"Erreur lors du chargement des données depuis Notion : {e}")
-        logger.error(f"Erreur lors du chargement des données depuis Notion : {e}", exc_info=True)
-        # Retourne des DataFrames vides en cas d'erreur
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}
-
-    return df_recettes, df_ingredients, df_ingredients_recettes, id_to_name_map
+    required_ingredients_recettes_cols = ['page_id_recette', 'qte_pers_s', 'ingredient_ok']
+    for col in required_ingredients_recettes_cols:
+        if col not in df_ingredients_recettes.columns:
+            st.error(f"La colonne '{col}' est manquante dans les données Ingredients_recettes après nettoyage. Colonnes trouvées: {df_ingredients_recettes.columns.tolist()}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
-# --- Application Streamlit principale ---
-st.set_page_config(layout="wide", page_title="Générateur de Menus Notion")
-st.title("🍽️ Générateur de Menus pour Notion")
+    # Prétraitement de df_planning
+    df_planning['date'] = pd.to_datetime(df_planning['date'])
+    df_planning['annee'] = df_planning['date'].dt.year
+    df_planning['semaine'] = df_planning['date'].dt.isocalendar().week.astype(int)
+    df_planning['jour_semaine'] = df_planning['date'].dt.day_name(locale='fr_FR')
+    df_planning['participant_s_'] = df_planning['participant_s_'].fillna(0).astype(int)
 
-st.markdown("""
-Cette application vous permet de générer des menus, des listes d'ingrédients,
-et de les synchroniser avec votre base de données Notion "Planning Menus",
-en utilisant vos recettes et ingrédients depuis Notion.
-""")
+    # Prétraitement de df_recettes
+    df_recettes['type_plat'] = df_recettes['type_plat'].apply(lambda x: x.split(', ') if isinstance(x, str) else [])
+    df_recettes_exploded = df_recettes.explode('type_plat')
 
-# Étape 1: Charger les données de référence depuis Notion
-df_recettes_notion, df_ingredients_notion, df_ingredients_recettes_notion, id_to_name_map = load_data_from_notion()
+    # Prétraitement de df_ingredients (assurez-vous que 'nom' est unique pour le merge)
+    df_ingredients_processed = df_ingredients.drop_duplicates(subset=['nom']).copy()
+    df_ingredients_processed['nom'] = df_ingredients_processed['nom'].str.strip()
+    df_ingredients_processed['qte_reste'] = pd.to_numeric(df_ingredients_processed['qte_reste'], errors='coerce').fillna(0)
 
-# Vérifier si le chargement Notion a réussi avant de continuer
-if df_recettes_notion.empty or df_ingredients_notion.empty or df_ingredients_recettes_notion.empty:
-    st.error("Impossible de charger les données de référence (Recettes, Ingrédients, Relations) depuis Notion. Veuillez vérifier vos bases de données et les noms de colonnes.")
-    st.stop() # Arrête l'exécution si les données de base ne sont pas disponibles
 
-st.header("1. Téléchargez votre fichier Planning.csv")
-st.info("Ce fichier contient les dates et les repas prévus, avec les noms de recettes que vous voulez planifier.")
+    # Prétraitement de df_ingredients_recettes (assurez-vous des types numériques)
+    df_ingredients_recettes['qte_pers_s'] = pd.to_numeric(df_ingredients_recettes['qte_pers_s'], errors='coerce').fillna(0)
+    df_ingredients_recettes_processed = df_ingredients_recettes.copy()
+    # Merge df_ingredients_recettes avec df_ingredients pour obtenir les noms d'ingrédients
+    df_ingredients_recettes_processed = pd.merge(
+        df_ingredients_recettes_processed,
+        df_ingredients_processed[['page_id', 'nom', 'unite', 'type_de_stock']], # Also get unit and type_de_stock
+        left_on='ingredient_ok',
+        right_on='page_id',
+        how='left',
+        suffixes=('', '_ing')
+    ).rename(columns={'nom_ing': 'nom_ingredient', 'unite_ing': 'unité', 'type_de_stock_ing': 'type_de_stock'})
+    df_ingredients_recettes_processed = df_ingredients_recettes_processed.drop(columns=['page_id_ing']) # Drop the redundant ID column from ingredient merge
 
-uploaded_planning = st.file_uploader("Chargez le fichier Planning.csv", type="csv")
+    st.info("Génération des menus et listes d'ingrédients...")
 
-df_planning = None
+    df_menus_complet = pd.DataFrame()
+    historique_recettes_recentes = {} # {id_recette: dernière_date_utilisation}
 
-if uploaded_planning is not None:
-    try:
-        df_planning = pd.read_csv(uploaded_planning)
-        st.success("Planning.csv chargé avec succès.")
+    # Charger l'historique des menus existants
+    if not df_menus_historique_notion.empty:
+        df_menus_historique = clean_column_names(df_menus_historique_notion)
+        # Ensure correct column names from fetch_menus_data
+        df_menus_historique = df_menus_historique.rename(columns={
+            'nom_menu': 'recette_nom',
+            'recette': 'id_recette',
+            'date': 'date'
+        })
+        df_menus_historique['date'] = pd.to_datetime(df_menus_historique['date'])
+        for idx, row in df_menus_historique.iterrows():
+            if row['id_recette']: # Can be multiple IDs from Notion relation
+                for rec_id in str(row['id_recette']).split(', '):
+                    rec_id = rec_id.strip()
+                    if rec_id:
+                        historique_recettes_recentes[rec_id] = max(
+                            historique_recettes_recentes.get(rec_id, pd.Timestamp.min),
+                            row['date']
+                        )
+        st.info(f"Historique de {len(historique_recettes_recentes)} recettes récentes chargé.")
+    else:
+        st.info("Aucun historique de menus trouvé ou vide.")
 
-        st.header("2. Générer les menus et listes")
-        # Le bouton de génération est maintenant activé après le chargement du planning
-        if st.button("Générer les Menus et Listes"):
-            with st.spinner("Génération et traitement en cours..."):
-                df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed = process_data(
-                    df_planning, df_recettes_notion, df_ingredients_notion, df_ingredients_recettes_notion, id_to_name_map
-                )
 
-                if not df_menus_complet.empty:
-                    st.subheader("Aperçu des Menus Générés :")
-                    st.dataframe(df_menus_complet[['date', 'repas_type', 'recette_nom', 'Participant(s)']])
+    for index, row_planning in df_planning.iterrows():
+        date_plan = row_planning['date']
+        repas_type = row_planning['repas_type']
+        participants = row_planning['participant_s_']
+        recette_suggeree_id = None # Stocke l'ID de la recette Notion
 
-                    generate_output_files(df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed)
+        # If a recipe name is already in the planning, find its ID
+        if 'recette_nom' in row_planning and pd.notna(row_planning['recette_nom']) and row_planning['recette_nom'].strip():
+            recette_nom_plan = row_planning['recette_nom'].strip()
+            # Try to match by "Nom" from recettes
+            matched_recettes = df_recettes[df_recettes['nom'].str.lower() == recette_nom_plan.lower()]
+            if not matched_recettes.empty:
+                recette_suggeree_id = matched_recettes.iloc[0]['page_id']
+                st.write(f"Utilisation de la recette pré-définie pour le {date_plan.strftime('%d/%m/%Y')} - {repas_type}: {recette_nom_plan}")
+            else:
+                st.warning(f"La recette '{recette_nom_plan}' du planning n'a pas été trouvée dans la base de données Recettes. Une recette sera choisie au hasard.")
+        
+        # If no specific recipe or if it wasn't found, choose randomly
+        if recette_suggeree_id is None:
+            type_plat_desire = []
+            if repas_type == 'midi':
+                type_plat_desire = ['Salade', 'Plat']
+            elif repas_type == 'soir':
+                type_plat_desire = ['Soupe', 'Plat']
 
-                    st.header("3. Intégrer avec Notion")
-                    notion_integrate = st.checkbox("Envoyer les menus générés à la base de données Notion 'Planning Menus'?")
-                    if notion_integrate:
-                        if st.button("Lancer l'intégration Notion"):
-                            with st.spinner("Intégration Notion en cours..."):
-                                integrate_with_notion(df_menus_complet, DATABASE_ID_MENUS, id_to_name_map)
-                                st.success("Processus d'intégration Notion terminé.")
+            recettes_candidates_for_type = df_recettes_exploded[
+                df_recettes_exploded['type_plat'].isin(type_plat_desire)
+            ]['page_id'].unique()
+
+            # Filter out recently used recipes
+            recettes_disponibles = []
+            for rec_id in recettes_candidates_for_type:
+                derniere_utilisation = historique_recettes_recentes.get(rec_id, pd.Timestamp.min)
+                if (date_plan - derniere_utilisation).days > nb_jours_anti_repetition:
+                    recettes_disponibles.append(rec_id)
+
+            if not recettes_disponibles:
+                st.warning(f"Pas de recettes disponibles non récemment utilisées pour {date_plan.strftime('%d/%m/%Y')} - {repas_type}. Réinitialisation de l'historique pour trouver une recette.")
+                recettes_disponibles = list(recettes_candidates_for_type) # If no recent option, consider all
+
+            if recettes_disponibles:
+                recette_suggeree_id = random.choice(recettes_disponibles)
+                st.write(f"Recette choisie au hasard pour le {date_plan.strftime('%d/%m/%Y')} - {repas_type}.")
+            else:
+                st.warning(f"Aucune recette candidate trouvée pour {date_plan.strftime('%d/%m/%Y')} - {repas_type}. Ce repas sera vide.")
+                continue # Skip to the next meal
+
+        # Get details of the chosen recipe
+        recette_detail = df_recettes[df_recettes['page_id'] == recette_suggeree_id]
+        if recette_detail.empty:
+            st.error(f"Détails de la recette avec l'ID {recette_suggeree_id} introuvables. Ce repas sera ignoré.")
+            continue
+        
+        recette_detail = recette_detail.iloc[0]
+        recette_nom = recette_detail['nom']
+        id_recette_notion = recette_detail['page_id'] # Notion Page ID for the recipe
+
+        # Add to history
+        historique_recettes_recentes[id_recette_notion] = date_plan
+
+        # Prepare menu row
+        nouvelle_ligne_menu = pd.DataFrame([{
+            'date': date_plan,
+            'repas_type': repas_type,
+            'recette_nom': recette_nom,
+            'id_recette': id_recette_notion,
+            'Participant(s)': participants
+        }])
+        df_menus_complet = pd.concat([df_menus_complet, nouvelle_ligne_menu], ignore_index=True)
+
+    st.success("Menus générés.")
+    return df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed
+
+def generate_output_files(df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed):
+    st.info("Génération des fichiers de sortie...")
+
+    # --- Génération du CSV des menus ---
+    output_menu_csv = io.StringIO()
+    # Select columns for export, ensuring they exist
+    colonnes_export = ['date', 'repas_type', 'recette_nom', 'id_recette', 'Participant(s)']
+    # The 'Participant(s)' column from input becomes 'participant_s_' after clean_column_names,
+    # but we want to present it as 'Participant(s)' in the output CSV for user readability.
+    # We will rename it back for the output file.
+    df_menus_complet_for_export = df_menus_complet.copy()
+    if 'participant_s_' in df_menus_complet_for_export.columns and 'Participant(s)' not in df_menus_complet_for_export.columns:
+        df_menus_complet_for_export.rename(columns={'participant_s_': 'Participant(s)'}, inplace=True)
+
+    actual_export_cols = [col for col in colonnes_export if col in df_menus_complet_for_export.columns]
+    df_menus_complet_for_export.to_csv(output_menu_csv, index=False, encoding="utf-8-sig", columns=actual_export_cols)
+    output_menu_csv.seek(0)
+    st.session_state[FICHIER_SORTIE_MENU_CSV] = output_menu_csv.getvalue().encode('utf-8-sig')
+    st.success(f"Fichier '{FICHIER_SORTIE_MENU_CSV}' généré.")
+
+    # --- Génération du TXT des listes d'ingrédients ---
+    contenu_fichier_recap_txt = []
+    contenu_fichier_recap_txt.append(f"Récapitulatif des ingrédients pour les menus générés ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n\n")
+
+    # Get recipe IDs used in generated menus
+    recette_ids_in_menus = df_menus_complet['id_recette'].unique().tolist()
+
+    # Filter df_ingredients_recettes_processed for ingredients of relevant recipes
+    df_ingredients_for_menus = df_ingredients_recettes_processed[
+        df_ingredients_recettes_processed['page_id_recette'].isin(recette_ids_in_menus)
+    ].copy()
+
+    # Merge with df_menus_complet to get participant count per meal
+    df_merged = pd.merge(
+        df_ingredients_for_menus,
+        df_menus_complet[['id_recette', 'Participant(s)']], # Use original column name for merge
+        left_on='page_id_recette',
+        right_on='id_recette',
+        how='left'
+    )
+    # Ensure 'Participant(s)' from merge is used correctly; it comes from df_menus_complet.
+    # The 'clean_column_names' would have changed it to 'participant_s_' in df_menus_complet.
+    # So we need to ensure the merge uses 'participant_s_' or 'Participant(s)' consistently.
+    # In process_data, df_menus_complet has 'Participant(s)'.
+    # So `df_merged['qte_totale_necessaire'] = df_merged['qte_pers_s'] * df_merged['Participant(s)']` is correct.
+
+    df_merged['qte_totale_necessaire'] = df_merged['qte_pers_s'] * df_merged['Participant(s)']
+
+    # Aggregate by ingredient name
+    liste_courses = df_merged.groupby('nom_ingredient').agg(
+        total_qte=('qte_totale_necessaire', 'sum'),
+        unite=('unité', lambda x: x.mode()[0] if not x.mode().empty else ''), # Get most frequent unit
+        type_de_stock=('type_de_stock', lambda x: x.mode()[0] if not x.mode().empty else '') # Get most frequent stock type
+    ).reset_index()
+
+    # Join with df_ingredients_processed for remaining quantity in stock
+    liste_courses = pd.merge(
+        liste_courses,
+        df_ingredients_processed[['nom', 'qte_reste']],
+        left_on='nom_ingredient',
+        right_on='nom',
+        how='left',
+        suffixes=('', '_stock')
+    )
+    liste_courses['qte_reste'] = pd.to_numeric(liste_courses['qte_reste'], errors='coerce').fillna(0)
+    liste_courses['qte_a_acheter'] = liste_courses['total_qte'] - liste_courses['qte_reste']
+    liste_courses = liste_courses[liste_courses['qte_a_acheter'] > 0] # Display only what needs to be bought
+
+    if not liste_courses.empty:
+        contenu_fichier_recap_txt.append("--- Liste de Courses ---\n")
+        for idx, row in liste_courses.iterrows():
+            qte = f"{row['qte_a_acheter']:.2f}".replace('.', ',')
+            contenu_fichier_recap_txt.append(f"- {row['nom_ingredient']}: {qte} {row['unite']} ({row['type_de_stock']})\n")
+    else:
+        contenu_fichier_recap_txt.append("Aucun ingrédient à acheter pour les menus générés.\n")
+
+    st.session_state[FICHIER_SORTIE_LISTES_TXT] = "".join(contenu_fichier_recap_txt).encode('utf-8')
+    st.success(f"Fichier '{FICHIER_SORTIE_LISTES_TXT}' généré.")
+
+
+def main():
+    st.set_page_config(layout="wide", page_title="Générateur de Menus Automatisé")
+    st.title("🍽️ Générateur de Menus et Listes")
+
+    st.sidebar.header("Configuration & Chargement")
+
+    data_source_option = st.sidebar.radio(
+        "Source des données Notion :",
+        ("Charger depuis Notion (recommandé)", "Charger depuis des fichiers CSV")
+    )
+
+    # Initialize dataframes in session state to persist them across reruns
+    if 'df_planning' not in st.session_state: st.session_state['df_planning'] = pd.DataFrame()
+    if 'df_recettes' not in st.session_state: st.session_state['df_recettes'] = pd.DataFrame()
+    if 'df_ingredients' not in st.session_state: st.session_state['df_ingredients'] = pd.DataFrame()
+    if 'df_ingredients_recettes' not in st.session_state: st.session_state['df_ingredients_recettes'] = pd.DataFrame()
+    if 'df_menus_historique_notion' not in st.session_state: st.session_state['df_menus_historique_notion'] = pd.DataFrame()
+
+    if data_source_option == "Charger depuis Notion (recommandé)":
+        st.sidebar.info("Les données seront extraites directement de vos bases de données Notion.")
+
+        saison_filtre = st.sidebar.selectbox(
+            "Filtrer les recettes par saison (laissez vide pour ignorer):",
+            ["", "Printemps", "Été", "Automne", "Hiver", "Toute l'année"],
+            index=1 # Default to Printemps as in original code
+        )
+
+        if st.sidebar.button("Extraire les données de Notion"):
+            with st.spinner("Extraction des données Notion..."):
+                st.session_state['df_ingredients'] = fetch_ingredients_data()
+                st.session_state['df_ingredients_recettes'] = fetch_ingredients_recettes_data()
+                st.session_state['df_recettes'] = fetch_recettes_data(saison_filtre)
+                st.session_state['df_menus_historique_notion'] = fetch_menus_data()
+
+                if st.session_state['df_ingredients'].empty or st.session_state['df_ingredients_recettes'].empty or st.session_state['df_recettes'].empty:
+                    st.error("Échec de l'extraction d'une ou plusieurs bases de données Notion. Veuillez vérifier les logs et les secrets.")
                 else:
-                    st.warning("Aucun menu n'a pu être généré. Veuillez vérifier votre fichier Planning.csv et vos données Notion.")
-    except Exception as e:
-        st.error(f"Erreur lors de la lecture ou du traitement de Planning.csv : {e}")
-        logger.error(f"Erreur générale avec Planning.csv : {e}", exc_info=True)
-else:
-    st.info("Veuillez charger le fichier Planning.csv pour activer la génération de menus.")
+                    st.sidebar.success("Données Notion extraites avec succès dans la session.")
+    else:
+        st.sidebar.info("Veuillez charger vos fichiers CSV manuellement.")
 
-st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
+    st.sidebar.subheader("Charger le fichier Planning (obligatoire)")
+    uploaded_planning_file = st.sidebar.file_uploader("Choisissez Planning.csv", type="csv", key="planning_uploader")
+    if uploaded_planning_file is not None:
+        try:
+            df_planning_temp = pd.read_csv(uploaded_planning_file)
+            st.session_state['df_planning'] = df_planning_temp
+            st.sidebar.success("Fichier Planning.csv chargé avec succès.")
+            st.sidebar.dataframe(df_planning_temp.head(2))
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+
+    if data_source_option == "Charger depuis des fichiers CSV":
+        st.sidebar.subheader("Charger les autres fichiers CSV")
+        uploaded_ingredients_file = st.sidebar.file_uploader("Choisissez Ingredients.csv", type="csv", key="ingredients_uploader")
+        uploaded_ingredients_recettes_file = st.sidebar.file_uploader("Choisissez Ingredients_recettes.csv", type="csv", key="ingredients_recettes_uploader")
+        uploaded_recettes_file = st.sidebar.file_uploader("Choisissez Recettes.csv", type="csv", key="recettes_uploader")
+        uploaded_menus_file = st.sidebar.file_uploader("Choisissez Menus.csv (pour historique)", type="csv", key="menus_uploader")
+
+        if uploaded_ingredients_file:
+            try:
+                st.session_state['df_ingredients'] = pd.read_csv(uploaded_ingredients_file)
+                st.sidebar.success("Fichier Ingredients.csv chargé.")
+            except Exception as e: st.sidebar.error(f"Erreur chargement Ingredients.csv: {e}")
+        if uploaded_ingredients_recettes_file:
+            try:
+                st.session_state['df_ingredients_recettes'] = pd.read_csv(uploaded_ingredients_recettes_file)
+                st.sidebar.success("Fichier Ingredients_recettes.csv chargé.")
+            except Exception as e: st.sidebar.error(f"Erreur chargement Ingredients_recettes.csv: {e}")
+        if uploaded_recettes_file:
+            try:
+                st.session_state['df_recettes'] = pd.read_csv(uploaded_recettes_file)
+                st.sidebar.success("Fichier Recettes.csv chargé.")
+            except Exception as e: st.sidebar.error(f"Erreur chargement Recettes.csv: {e}")
+        if uploaded_menus_file:
+            try:
+                st.session_state['df_menus_historique_notion'] = pd.read_csv(uploaded_menus_file)
+                st.sidebar.success("Fichier Menus.csv chargé pour l'historique.")
+            except Exception as e: st.sidebar.error(f"Erreur chargement Menus.csv: {e}")
+
+
+    # Main application logic
+    st.header("1. Pré-requis et Aperçu des Données")
+    st.write("Assurez-vous que tous les fichiers nécessaires sont chargés ou que les données Notion ont été extraites.")
+
+    # Display status of loaded data
+    st.subheader("Statut des données :")
+    data_present = {}
+    data_present['Planning'] = not st.session_state['df_planning'].empty
+    data_present['Ingrédients'] = not st.session_state['df_ingredients'].empty
+    data_present['Ingrédients Recettes'] = not st.session_state['df_ingredients_recettes'].empty
+    data_present['Recettes'] = not st.session_state['df_recettes'].empty
+    data_present['Menus Historique'] = not st.session_state['df_menus_historique_notion'].empty
+
+    for name, is_present in data_present.items():
+        if is_present:
+            st.success(f"✅ Données '{name}' chargées. ({len(st.session_state.get('df_' + name.lower().replace(' ', '_').replace('ingrédients', 'ingredients'), pd.DataFrame()))} lignes)")
+        else:
+            st.warning(f"❌ Données '{name}' non chargées ou vides.")
+
+    # Define the mandatory datasets for processing
+    mandatory_datasets = ['Planning', 'Ingrédients', 'Ingrédients Recettes', 'Recettes']
+    all_mandatory_data_loaded = all(data_present[key] for key in mandatory_datasets)
+
+
+    if all_mandatory_data_loaded:
+        st.header("2. Générer les menus et listes")
+        if st.button("Générer les Menus et Listes"):
+            with st.spinner("Génération en cours..."):
+                try:
+                    df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed = process_data(
+                        st.session_state['df_planning'],
+                        st.session_state['df_recettes'],
+                        st.session_state['df_ingredients'],
+                        st.session_state['df_ingredients_recettes'],
+                        st.session_state['df_menus_historique_notion'] # Pass historical menus
+                    )
+
+                    if not df_menus_complet.empty:
+                        st.subheader("Aperçu des Menus Générés :")
+                        st.dataframe(df_menus_complet[['date', 'repas_type', 'recette_nom', 'Participant(s)']])
+
+                        generate_output_files(df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed)
+
+                        st.header("3. Télécharger les fichiers générés")
+                        if FICHIER_SORTIE_MENU_CSV in st.session_state:
+                            st.download_button(
+                                label=f"Télécharger {FICHIER_SORTIE_MENU_CSV}",
+                                data=st.session_state[FICHIER_SORTIE_MENU_CSV],
+                                file_name=FICHIER_SORTIE_MENU_CSV,
+                                mime="text/csv",
+                                key="download_menu_csv"
+                            )
+                        if FICHIER_SORTIE_LISTES_TXT in st.session_state:
+                            st.download_button(
+                                label=f"Télécharger {FICHIER_SORTIE_LISTES_TXT}",
+                                data=st.session_state[FICHIER_SORTIE_LISTES_TXT],
+                                file_name=FICHIER_SORTIE_LISTES_TXT,
+                                mime="text/plain",
+                                key="download_lists_txt"
+                            )
+                        st.success("Processus de génération terminé. Les fichiers sont prêts à être téléchargés.")
+                    else:
+                        st.warning("Aucun menu n'a pu être généré. Veuillez vérifier vos fichiers d'entrée et les conditions de filtre.")
+                except Exception as e:
+                    st.error(f"Une erreur est survenue pendant la génération : {e}")
+                    logger.exception("Erreur pendant la génération des menus.")
+    else:
+        st.warning("Veuillez charger tous les fichiers CSV ou extraire toutes les données Notion nécessaires pour activer la génération. (Planning, Ingrédients, Ingrédients Recettes, Recettes sont obligatoires).")
+
+    st.info("N'oubliez pas de configurer vos secrets Notion dans `.streamlit/secrets.toml` si vous utilisez l'option 'Charger depuis Notion'.")
+    st.markdown("""
+    Exemple de `.streamlit/secrets.toml`:
+    ```toml
+    notion_api_key = "secret_YOUR_NOTION_API_KEY"
+    notion_database_id_ingredients = "b23b048b67334032ac1ae4e82d308817" # Default from your provided code
+    notion_database_id_ingredients_recettes = "1d16fa46f8b2805b8377eba7bf668eb5" # Default from your provided code
+    notion_database_id_recettes = "1d16fa46f8b2805b8377eba7bf668eb5" # Default from your provided code
+    notion_database_id_menus = "9025cfa1c18d4501a91dbeb1b10b48bd" # Default from your provided code
+    ```
+    """)
+
+
+if __name__ == "__main__":
+    main()
