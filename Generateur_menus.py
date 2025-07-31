@@ -544,16 +544,21 @@ class MenuGenerator:
                 logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
                 continue
 
-            premier_mot_reste = nom_plat_reste.lower().split()[0]
-            mots_cles_recents_set = set()
-            if menu_recent_noms_list:
-                 for nom_plat_r in menu_recent_noms_list:
-                    if isinstance(nom_plat_r, str) and nom_plat_r.strip():
-                        try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
-                        except IndexError: pass
-            if premier_mot_reste not in mots_cles_recents_set:
-                candidats_restes_ids.append(plat_id_orig_str)
-                logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
+            # ANCIENNE LOGIQUE D'ANTI-RÉPÉTITION, RETIRÉE POUR LES RESTES :
+            # premier_mot_reste = nom_plat_reste.lower().split()[0]
+            # mots_cles_recents_set = set()
+            # if menu_recent_noms_list:
+            #      for nom_plat_r in menu_recent_noms_list:
+            #         if isinstance(nom_plat_r, str) and nom_plat_r.strip():
+            #             try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
+            #             except IndexError: pass
+            # if premier_mot_reste not in mots_cles_recents_set:
+            #     candidats_restes_ids.append(plat_id_orig_str)
+            #     logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
+            
+            # Nouvelle logique : Tous les restes valides sont ajoutés si les conditions précédentes sont respectées.
+            candidats_restes_ids.append(plat_id_orig_str)
+            logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes (pas de filtrage anti-répétition pour les restes).")
 
 
         if candidats_restes_ids:
