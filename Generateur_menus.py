@@ -478,7 +478,7 @@ class MenuGenerator:
             else:
                 recette_choisie_final = sorted(recettes_candidates_tier1, key=lambda r_id: scores_candidats_dispo_tier1.get(r_id, -1), reverse=True)[0]
             
-            recettes_manquants_dict_chosen = recettes_manquants_dict_tier1
+            recettes_manquants_dict_chosen = recettes_manquants_dict_tier1.get(recette_choisie_final, {}) # Ensure it's a dict
             remarques_repas = "Plat généré (strict)"
             logger.info(f"Tier 1 succès: {self.recette_manager.obtenir_nom(recette_choisie_final)}")
 
@@ -504,7 +504,7 @@ class MenuGenerator:
                 else:
                     recette_choisie_final = sorted(recettes_candidates_tier2, key=lambda r_id: scores_candidats_dispo_tier2.get(r_id, -1), reverse=True)[0]
                 
-                recettes_manquants_dict_chosen = recettes_manquants_dict_tier2
+                recettes_manquants_dict_chosen = recettes_manquants_dict_tier2.get(recette_choisie_final, {}) # Ensure it's a dict
                 remarques_repas = "Plat généré (anti-répétition assouplie)"
                 logger.info(f"Tier 2 succès: {self.recette_manager.obtenir_nom(recette_choisie_final)}")
 
@@ -524,7 +524,7 @@ class MenuGenerator:
                     for r_id in recettes_candidates_tier3
                 }
                 recette_choisie_final = sorted(recettes_candidates_tier3, key=lambda r_id: scores_candidats_dispo_tier3.get(r_id, -1), reverse=True)[0]
-                recettes_manquants_dict_chosen = recettes_manquants_dict_tier3
+                recettes_manquants_dict_chosen = recettes_manquants_dict_tier3.get(recette_choisie_final, {}) # Ensure it's a dict
                 remarques_repas = "Plat généré (mode urgence - toutes règles assouplies)"
                 logger.info(f"Tier 3 succès (urgence): {self.recette_manager.obtenir_nom(recette_choisie_final)}")
             else:
@@ -706,11 +706,12 @@ class MenuGenerator:
                     self.recette_manager.decrementer_stock(recette_choisie_id, 1, date_repas_dt) # For 1 person
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
             else:
-                recette_choisie_id, ingredients_manquants_pour_recette_choisie, remarques_repas = self._traiter_menu_standard(
+                recette_choisie_id, ingredients_manquants_pour_recette_choisie, remarques_repas_temp = self._traiter_menu_standard( # Utilisez une variable temporaire
                     date_repas_dt, participants_str, participants_count,
                     used_recipes_current_generation_set, menu_recent_noms,
                     transportable_req, temps_req, nutrition_req
                 )
+                remarques_repas = remarques_repas_temp # Assurez-vous que c'est bien une chaîne ici.
 
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
