@@ -758,11 +758,6 @@ def main():
 
     st.sidebar.markdown("---") # Séparateur visuel
 
-    # 1. Chargement du fichier Planning.csv
-    st.sidebar.subheader("1. Fichier Planning des Repas (.csv)")
-    uploaded_planning_file = st.sidebar.file_uploader(
-        "Choisissez votre fichier Planning.csv", type=["csv"], key="planning_uploader"
-    )
 
     # Initialisation des DataFrames dans session_state si non présents
     if 'df_planning' not in st.session_state:
@@ -776,16 +771,6 @@ def main():
     if 'df_menus_notion' not in st.session_state: # Initialisation pour les menus existants
         st.session_state['df_menus_notion'] = pd.DataFrame()
 
-    if uploaded_planning_file is not None:
-        try:
-            df_planning_loaded = pd.read_csv(uploaded_planning_file, sep=None, engine='python')
-            st.session_state['df_planning'] = df_planning_loaded
-            st.sidebar.success("Fichier Planning.csv chargé avec succès.")
-        except Exception as e:
-            st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
-            st.session_state['df_planning'] = pd.DataFrame()
-    else:
-        st.sidebar.info("Veuillez charger votre fichier Planning.csv.")
 
     # Chargement automatique des données Notion au démarrage ou si elles sont vides
     # Ces appels utiliseront le cache si les données sont déjà là, ou referont la requête sinon.
@@ -820,12 +805,6 @@ def main():
 
 
     st.header("1. Vérification des Données Chargées")
-    if not st.session_state['df_planning'].empty:
-        st.write("✅ Planning.csv est chargé.")
-        st.subheader("Aperçu de Planning.csv :")
-        st.dataframe(st.session_state['df_planning'].head())
-    else:
-        st.write("❌ Planning.csv n'est pas encore chargé. Veuillez le charger dans la barre latérale.")
 
     if not st.session_state['df_ingredients'].empty:
         st.write("✅ Données Ingrédients (Notion) chargées.")
