@@ -514,6 +514,59 @@ class MenuGenerator:
             "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
         })
 
+    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
+        candidats_restes_ids = []
+        # Tri par date, le plus ancien en premier, ce qui est logique pour les restes
+        sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
+
+        logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
+        if not sorted_plats_transportables:
+            logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
+
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
+            nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
+            
+            logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
+
+            if not (0 < jours_ecoules <= 2): # Condition: planifié dans les 2 jours précédents
+                logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
+                continue
+            if plat_id_orig_str in repas_b_utilises_ids_list:
+                logger.debug(f"Reste {nom_plat_reste} filtré: Déjà utilisé pour un repas B.")
+                continue
+            if not (nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste):
+                logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
+                continue
+            
+            # Vérification explicite que la recette d'origine est marquée comme transportable
+            if not self.recette_manager.est_transportable(plat_id_orig_str): # Condition: transportable est 'oui'
+                logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
+                continue
+
+            premier_mot_reste = nom_plat_reste.lower().split()[0]
+            mots_cles_recents_set = set()
+            if menu_recent_noms_list:
+                 for nom_plat_r in menu_recent_noms_list:
+                    if isinstance(nom_plat_r, str) and nom_plat_r.strip():
+                        try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
+                        except IndexError: pass
+            if premier_mot_reste not in mots_cles_recents_set:
+                candidats_restes_ids.append(plat_id_orig_str)
+                logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
+
+
+        if candidats_restes_ids:
+            plat_id_choisi_str = candidats_restes_ids[0] # Choisit le reste transportable le plus ancien et valide
+            nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
+            repas_b_utilises_ids_list.append(plat_id_choisi_str)
+            logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
+            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
+
+        logger.info("Pas de reste disponible trouvé pour ce Repas B.")
+        return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
+
+
     def generer_menu(self):
         resultats_df_list = []
         repas_b_utilises_ids = []
