@@ -1,3 +1,8 @@
 pip install notion-client
 pip install pandas
 pip install httpx
+pip install streamlit
+streamlit
+notion-client
+pandas
+httpx
