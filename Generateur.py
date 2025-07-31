@@ -206,7 +206,7 @@ def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recett
 
     # Récupérer l'ID de la recette pour la relation Notion, en utilisant le mapping ID->Nom
     df_menus_complet['Recette ID'] = df_menus_complet['recette_nom'].apply(
-        lambda x: get_page_id_by_name(DATABASE_ID_RECETTES, "Nom", x) if x else None
+        lambda x: get_page_id_by_name(DATABASE_ID_RECETTES, "Nom_plat", x) if x else None # Utilisez "Nom_plat" ici
     )
 
     st.success("Traitement des données terminé.")
@@ -249,8 +249,11 @@ def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recet
 
     # Comparaison avec le stock (si la colonne 'quantite_stock' existe et est numérique dans df_ingredients)
     if 'quantite_stock' in df_ingredients.columns:
-        df_ingredients['quantite_stock'] = pd.to_numeric(df_ingredients['quantite_stock'], errors='coerce').fillna(0)
+        # Assurez-vous que les unités sont compatibles ou que la comparaison se fait correctement
+        # Pour une comparaison simple, nous allons supposer que les unités sont les mêmes
+        # Ou alors, vous pourriez ajouter une logique de conversion d'unité ici.
         liste_courses = pd.merge(liste_courses, df_ingredients[['nom', 'quantite_stock']], left_on='ingredient', right_on='nom', how='left').drop(columns='nom')
+        liste_courses['A acheter'] = liste_courses['quantite'] - liste_courses['quantite_stock'].fillna(0)
         liste_courses['A acheter'] = liste_courses['A acheter'].apply(lambda x: max(0, x)) # Ne pas afficher de quantités négatives
 
         # Filtre pour n'afficher que ce qui est à acheter
@@ -331,7 +334,7 @@ def integrate_with_notion(df_menus_complet, database_id_menus):
                     }
                 ]
             },
-            "Participant(s)": {
+            "Participant(s)": { # Garde 'Participant(s)' ici car c'est pour la base Planning Menus
                 "rich_text": [
                     {
                         "text": {
@@ -381,25 +384,26 @@ def load_data_from_notion():
             props = get_page_properties(page)
             data_recettes.append(props)
             # Ajout d'un message de débogage si les colonnes attendues ne sont pas trouvées
-            if 'Nom' not in props or 'Participant(s)' not in props:
-                st.warning(f"Propriétés 'Nom' ou 'Participant(s)' non trouvées pour la page de recette '{props.get('Nom', 'N/A')}' (ID: {page['id']}). Propriétés trouvées: {list(props.keys())}")
+            if 'Nom_plat' not in props or 'Nb personnes (mise à jour du stock)formule' not in props:
+                st.warning(f"Propriétés 'Nom_plat' ou 'Nb personnes (mise à jour du stock)formule' non trouvées pour la page de recette '{props.get('Nom_plat', 'N/A')}' (ID: {page['id']}). Propriétés trouvées: {list(props.keys())}")
 
         df_recettes = pd.DataFrame(data_recettes)
         st.write(f"**DEBUG (Recettes): Colonnes trouvées dans le DataFrame Notion avant renommage :** {df_recettes.columns.tolist()}") # Debug print
 
         # Vérification et renommage des colonnes pour correspondre à la logique 'nom', 'participants'
-        if 'Nom' in df_recettes.columns and 'Participant(s)' in df_recettes.columns:
-            df_recettes.rename(columns={'Nom': 'nom', 'Participant(s)': 'participants'}, inplace=True)
+        if 'Nom_plat' in df_recettes.columns and 'Nb personnes (mise à jour du stock)formule' in df_recettes.columns:
+            # CORRECTION ICI : Utilisez les noms de propriétés exacts de Notion.
+            df_recettes.rename(columns={'Nom_plat': 'nom', 'Nb personnes (mise à jour du stock)formule': 'participants'}, inplace=True)
             # Construire un mapping ID -> Nom pour les recettes
             for page in recettes_pages:
                 recette_id = page['id']
-                # Assurez-vous que 'Nom' est le nom de la propriété du titre dans Notion
-                recette_name = get_page_properties(page).get('Nom')
+                # Assurez-vous que 'Nom_plat' est le nom de la propriété du titre dans Notion
+                recette_name = get_page_properties(page).get('Nom_plat')
                 if recette_name:
                     id_to_name_map[recette_id] = recette_name
             st.success(f"{len(df_recettes)} recettes chargées depuis Notion.")
         else:
-            st.error("ERREUR CRITIQUE: Colonnes 'Nom' ou 'Participant(s)' manquantes dans la base de données Recettes Notion. Vérifiez l'ORTHOGRAPHE EXACTE et la CASSE de ces propriétés dans Notion.")
+            st.error("ERREUR CRITIQUE: Colonnes 'Nom_plat' ou 'Nb personnes (mise à jour du stock)formule' manquantes dans la base de données Recettes Notion. Vérifiez l'ORTHOGRAPHE EXACTE et la CASSE de ces propriétés dans Notion.")
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {} # Retourne des DFs vides pour arrêter l'app
 
         # --- Récupération des Ingrédients ---
