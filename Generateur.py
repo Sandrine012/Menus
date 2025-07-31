@@ -151,23 +151,19 @@ def get_page_id_by_name(database_id, page_name_property, page_name):
         return None
 
 # --- Fonctions de traitement des données ---
-def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recettes, id_to_name_map):
+def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recettes):
     st.info("Traitement des données en cours...")
     logger.info("Début du traitement des données.")
 
     # Nettoyage des noms de colonnes : suppression des espaces superflus et caractères spéciaux
-    # Ceci est important car les noms de colonnes Notion peuvent contenir des espaces/caractères spéciaux.
-    # Assurez-vous que les DataFrames Notion ont déjà été renommés pour correspondre à cette logique.
     df_planning.columns = [col.strip().replace(" ", "_").replace("(", "").replace(")", "").replace("é", "e").replace("à", "a").replace("ç", "c").lower() for col in df_planning.columns]
-    # Les autres DataFrames (recettes, ingredients, ingredients_recettes) devraient déjà avoir des noms de colonnes cohérents
-    # après la conversion depuis Notion et le renommage dans la fonction load_data_from_notion.
 
     df_planning['date'] = pd.to_datetime(df_planning['date'], format='%d/%m/%Y')
     df_planning.set_index('date', inplace=True)
 
     # Assurez-vous que df_recettes a une colonne 'nom' et 'participants'
     if 'nom' not in df_recettes.columns or 'participants' not in df_recettes.columns:
-        st.error("Le DataFrame des recettes de Notion ne contient pas les colonnes 'nom' ou 'participants' requises.")
+        st.error("Le DataFrame des recettes de Notion ne contient pas les colonnes 'nom' ou 'participants' requises après renommage. Vérifiez la fonction `load_data_from_notion`.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame() # Retourne des DFs vides pour éviter des erreurs
 
     df_recettes['nom'] = df_recettes['nom'].str.strip()
@@ -177,16 +173,15 @@ def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recett
        'ingredient_nom' not in df_ingredients_recettes.columns or \
        'quantite' not in df_ingredients_recettes.columns or \
        'unite' not in df_ingredients_recettes.columns:
-        st.error("Le DataFrame des ingrédients par recette de Notion ne contient pas les colonnes requises ('recette_nom', 'ingredient_nom', 'quantite', 'unite').")
+        st.error("Le DataFrame des ingrédients par recette de Notion ne contient pas les colonnes requises ('recette_nom', 'ingredient_nom', 'quantite', 'unite') après renommage.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df_ingredients_recettes['recette_nom'] = df_ingredients_recettes['recette_nom'].str.strip()
     df_ingredients_recettes['ingredient_nom'] = df_ingredients_recettes['ingredient_nom'].str.strip()
 
-
     # Assurez-vous que df_ingredients a une colonne 'nom' et 'quantite_stock' (optionnel)
     if 'nom' not in df_ingredients.columns:
-        st.error("Le DataFrame des ingrédients de Notion ne contient pas la colonne 'nom' requise.")
+        st.error("Le DataFrame des ingrédients de Notion ne contient pas la colonne 'nom' requise après renommage.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df_ingredients['nom'] = df_ingredients['nom'].str.strip()
@@ -210,7 +205,6 @@ def process_data(df_planning, df_recettes, df_ingredients, df_ingredients_recett
     df_menus_complet.rename(columns={'nom': 'Nom Recette', 'participants': 'Participant(s)'}, inplace=True)
 
     # Récupérer l'ID de la recette pour la relation Notion, en utilisant le mapping ID->Nom
-    # Note: DATABASE_ID_RECETTES est la base des recettes où se trouve le nom.
     df_menus_complet['Recette ID'] = df_menus_complet['recette_nom'].apply(
         lambda x: get_page_id_by_name(DATABASE_ID_RECETTES, "Nom", x) if x else None
     )
@@ -244,15 +238,12 @@ def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recet
     logger.info(f"Fichier CSV '{FICHIER_SORTIE_MENU_CSV}' prêt pour téléchargement.")
 
     # Génération du récapitulatif des ingrédients
-    # Assurez-vous que 'ingredient_nom' et 'recette_nom' sont les noms de colonnes après le traitement Notion
     df_details_ingredients = pd.merge(df_menus_complet, df_ingredients_recettes, left_on='recette_nom', right_on='recette_nom', how='inner')
     df_details_ingredients = pd.merge(df_details_ingredients, df_ingredients, left_on='ingredient_nom', right_on='nom', how='inner', suffixes=('_recette', '_stock'))
 
     df_details_ingredients['quantite'] = pd.to_numeric(df_details_ingredients['quantite'], errors='coerce').fillna(0)
 
     # Calcul des quantités totales par ingrédient et unité
-    # Les colonnes 'ingredient' et 'unite' doivent être présentes dans df_details_ingredients
-    # Si 'unite' vient de df_ingredients_recettes, assurez-vous de la conserver.
     liste_courses = df_details_ingredients.groupby(['ingredient_nom', 'unite_recette'])['quantite'].sum().reset_index()
     liste_courses.rename(columns={'ingredient_nom': 'ingredient', 'unite_recette': 'unite'}, inplace=True) # Renommer pour la sortie
 
@@ -260,7 +251,6 @@ def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recet
     if 'quantite_stock' in df_ingredients.columns:
         df_ingredients['quantite_stock'] = pd.to_numeric(df_ingredients['quantite_stock'], errors='coerce').fillna(0)
         liste_courses = pd.merge(liste_courses, df_ingredients[['nom', 'quantite_stock']], left_on='ingredient', right_on='nom', how='left').drop(columns='nom')
-        liste_courses['A acheter'] = liste_courses['quantite'] - liste_courses['quantite_stock']
         liste_courses['A acheter'] = liste_courses['A acheter'].apply(lambda x: max(0, x)) # Ne pas afficher de quantités négatives
 
         # Filtre pour n'afficher que ce qui est à acheter
@@ -301,7 +291,7 @@ def generate_output_files(df_menus_complet, df_ingredients, df_ingredients_recet
 
 
 # --- Fonction d'intégration Notion ---
-def integrate_with_notion(df_menus_complet, database_id_menus, id_to_name_map):
+def integrate_with_notion(df_menus_complet, database_id_menus):
     st.info("Intégration avec Notion en cours...")
     logger.info("Début de l'intégration avec Notion.")
 
@@ -312,12 +302,6 @@ def integrate_with_notion(df_menus_complet, database_id_menus, id_to_name_map):
         st.warning("Aucun menu valide à intégrer dans Notion.")
         logger.warning("Aucun menu valide à intégrer dans Notion.")
         return
-
-    # Pré-charger les IDs des recettes pour éviter des requêtes répétées dans la boucle
-    # Cette information est déjà dans df_menus_complet['Recette ID']
-    # Vous pouvez améliorer cela en faisant un mapping de tous les noms de recettes uniques vers leurs IDs une seule fois.
-    # Pour l'instant, on se base sur la colonne 'Recette ID' déjà calculée.
-
 
     for index, row in df_to_integrate.iterrows():
         date_str = row['date'] # Format DD/MM/YYYY
@@ -373,9 +357,7 @@ def integrate_with_notion(df_menus_complet, database_id_menus, id_to_name_map):
         existing_page_id = get_page_id_by_name(database_id_menus, "Nom", properties["Nom"]["title"][0]["text"]["content"])
 
         if existing_page_id:
-            st.info(f"La page pour '{repas_type} - {recette_nom} ({date_str})' existe déjà. Ignorée (ou mise à jour si vous implémentez la logique).")
-            # Si vous voulez mettre à jour, décommentez et adaptez :
-            # update_page_property(existing_page_id, "Participant(s)", "rich_text", str(participants))
+            st.info(f"La page pour '{repas_type} - {recette_nom} ({date_str})' existe déjà. Ignorée.")
         else:
             st.info(f"Création de la page pour '{repas_type} - {recette_nom} ({date_str})'...")
             create_page(database_id_menus, properties)
@@ -394,8 +376,16 @@ def load_data_from_notion():
     try:
         # --- Récupération des Recettes ---
         recettes_pages = query_database(DATABASE_ID_RECETTES)
-        data_recettes = [get_page_properties(page) for page in recettes_pages]
+        data_recettes = []
+        for page in recettes_pages:
+            props = get_page_properties(page)
+            data_recettes.append(props)
+            # Ajout d'un message de débogage si les colonnes attendues ne sont pas trouvées
+            if 'Nom' not in props or 'Participant(s)' not in props:
+                st.warning(f"Propriétés 'Nom' ou 'Participant(s)' non trouvées pour la page de recette '{props.get('Nom', 'N/A')}' (ID: {page['id']}). Propriétés trouvées: {list(props.keys())}")
+
         df_recettes = pd.DataFrame(data_recettes)
+        st.write(f"**DEBUG (Recettes): Colonnes trouvées dans le DataFrame Notion avant renommage :** {df_recettes.columns.tolist()}") # Debug print
 
         # Vérification et renommage des colonnes pour correspondre à la logique 'nom', 'participants'
         if 'Nom' in df_recettes.columns and 'Participant(s)' in df_recettes.columns:
@@ -403,21 +393,28 @@ def load_data_from_notion():
             # Construire un mapping ID -> Nom pour les recettes
             for page in recettes_pages:
                 recette_id = page['id']
-                recette_name = get_page_properties(page).get('Nom') # Assurez-vous que c'est bien 'Nom'
+                # Assurez-vous que 'Nom' est le nom de la propriété du titre dans Notion
+                recette_name = get_page_properties(page).get('Nom')
                 if recette_name:
                     id_to_name_map[recette_id] = recette_name
             st.success(f"{len(df_recettes)} recettes chargées depuis Notion.")
         else:
-            st.warning("Colonnes 'Nom' ou 'Participant(s)' manquantes dans la base de données Recettes Notion. Veuillez vérifier.")
-            df_recettes = pd.DataFrame(columns=['nom', 'participants'])
+            st.error("ERREUR CRITIQUE: Colonnes 'Nom' ou 'Participant(s)' manquantes dans la base de données Recettes Notion. Vérifiez l'ORTHOGRAPHE EXACTE et la CASSE de ces propriétés dans Notion.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {} # Retourne des DFs vides pour arrêter l'app
 
         # --- Récupération des Ingrédients ---
         ingredients_pages = query_database(DATABASE_ID_INGREDIENTS)
-        data_ingredients = [get_page_properties(page) for page in ingredients_pages]
+        data_ingredients = []
+        for page in ingredients_pages:
+            props = get_page_properties(page)
+            data_ingredients.append(props)
+            if 'Nom' not in props or 'Unité' not in props or 'Quantité en Stock' not in props:
+                 st.warning(f"Propriétés 'Nom', 'Unité' ou 'Quantité en Stock' non trouvées pour la page d'ingrédient '{props.get('Nom', 'N/A')}' (ID: {page['id']}). Propriétés trouvées: {list(props.keys())}")
+
         df_ingredients = pd.DataFrame(data_ingredients)
+        st.write(f"**DEBUG (Ingrédients): Colonnes trouvées dans le DataFrame Notion avant renommage :** {df_ingredients.columns.tolist()}") # Debug print
 
         # Vérification et renommage des colonnes pour correspondre à 'nom', 'quantite_stock', 'unite'
-        # Assurez-vous que 'Nom' est le titre, 'Unité' et 'Quantité en Stock' sont les noms réels dans Notion.
         if 'Nom' in df_ingredients.columns and 'Unité' in df_ingredients.columns and 'Quantité en Stock' in df_ingredients.columns:
             df_ingredients.rename(columns={'Nom': 'nom', 'Unité': 'unite', 'Quantité en Stock': 'quantite_stock'}, inplace=True)
             # Construire un mapping ID -> Nom pour les ingrédients
@@ -428,27 +425,30 @@ def load_data_from_notion():
                     id_to_name_map[ingredient_id] = ingredient_name
             st.success(f"{len(df_ingredients)} ingrédients chargés depuis Notion.")
         else:
-            st.warning("Colonnes 'Nom', 'Unité' ou 'Quantité en Stock' manquantes dans la base de données Ingrédients Notion. Veuillez vérifier.")
-            df_ingredients = pd.DataFrame(columns=['nom', 'unite', 'quantite_stock'])
+            st.error("ERREUR CRITIQUE: Colonnes 'Nom', 'Unité' ou 'Quantité en Stock' manquantes dans la base de données Ingrédients Notion. Vérifiez l'ORTHOGRAPHE EXACTE et la CASSE de ces propriétés.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}
 
         # --- Récupération des relations Ingrédients_recettes ---
         ingredients_recettes_pages = query_database(DATABASE_ID_INGREDIENTS_RECETTES)
         data_ingredients_recettes = []
 
-        # Pour chaque entrée dans la base Ingredients_recettes, nous devons résoudre les relations (IDs vers noms)
         for page in ingredients_recettes_pages:
             props = get_page_properties(page)
-            recette_ids = props.get('Recette', []) # Le nom de la propriété de relation vers les recettes
-            ingredient_ids = props.get('Ingrédient', []) # Le nom de la propriété de relation vers les ingrédients
-            quantite = props.get('Quantité') # Le nom de la propriété numérique pour la quantité
-            unite = props.get('Unité') # Le nom de la propriété de sélection ou texte pour l'unité
+            # Noms des propriétés de relation et de valeur dans votre base Notion 'Ingredients_recettes'
+            recette_ids = props.get('Recette', [])
+            ingredient_ids = props.get('Ingrédient', [])
+            quantite = props.get('Quantité')
+            unite = props.get('Unité') # Assurez-vous que cette colonne existe dans votre table de jonction
 
-            # Assurez-vous que les colonnes 'Recette', 'Ingrédient', 'Quantité', 'Unité' existent et sont de type correct dans votre base Notion 'Ingredients_recettes'
+            if 'Recette' not in props or 'Ingrédient' not in props or 'Quantité' not in props or 'Unité' not in props:
+                st.warning(f"Propriétés 'Recette', 'Ingrédient', 'Quantité' ou 'Unité' manquantes pour la page de relation '{props.get('Nom', 'N/A')}' (ID: {page['id']}). Propriétés trouvées: {list(props.keys())}")
+
+
             if recette_ids and ingredient_ids and quantite is not None and unite is not None:
                 for r_id in recette_ids:
-                    recette_name = id_to_name_map.get(r_id)
+                    recette_name = id_to_name_map.get(r_id) # Utiliser le mapping
                     for i_id in ingredient_ids:
-                        ingredient_name = id_to_name_map.get(i_id)
+                        ingredient_name = id_to_name_map.get(i_id) # Utiliser le mapping
                         if recette_name and ingredient_name:
                             data_ingredients_recettes.append({
                                 'recette_nom': recette_name,
@@ -457,12 +457,13 @@ def load_data_from_notion():
                                 'unite': unite
                             })
         df_ingredients_recettes = pd.DataFrame(data_ingredients_recettes)
+        st.write(f"**DEBUG (Ingrédients-Recettes): Colonnes trouvées dans le DataFrame Notion :** {df_ingredients_recettes.columns.tolist()}") # Debug print
+
         st.success(f"{len(df_ingredients_recettes)} relations ingrédients-recettes chargées depuis Notion.")
 
     except Exception as e:
-        st.error(f"Erreur lors du chargement des données depuis Notion : {e}")
+        st.error(f"Une erreur inattendue est survenue lors du chargement des données depuis Notion : {e}")
         logger.error(f"Erreur lors du chargement des données depuis Notion : {e}", exc_info=True)
-        # Retourne des DataFrames vides en cas d'erreur
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}
 
     return df_recettes, df_ingredients, df_ingredients_recettes, id_to_name_map
@@ -479,12 +480,13 @@ en utilisant vos recettes et ingrédients depuis Notion.
 """)
 
 # Étape 1: Charger les données de référence depuis Notion
+# La fonction affichera des messages d'erreur si elle échoue
 df_recettes_notion, df_ingredients_notion, df_ingredients_recettes_notion, id_to_name_map = load_data_from_notion()
 
 # Vérifier si le chargement Notion a réussi avant de continuer
 if df_recettes_notion.empty or df_ingredients_notion.empty or df_ingredients_recettes_notion.empty:
-    st.error("Impossible de charger les données de référence (Recettes, Ingrédients, Relations) depuis Notion. Veuillez vérifier vos bases de données et les noms de colonnes.")
-    st.stop() # Arrête l'exécution si les données de base ne sont pas disponibles
+    st.error("Le chargement des données de référence (Recettes, Ingrédients, ou Relations) depuis Notion a échoué. Veuillez corriger les problèmes indiqués ci-dessus.")
+    st.stop()
 
 st.header("1. Téléchargez votre fichier Planning.csv")
 st.info("Ce fichier contient les dates et les repas prévus, avec les noms de recettes que vous voulez planifier.")
@@ -499,11 +501,10 @@ if uploaded_planning is not None:
         st.success("Planning.csv chargé avec succès.")
 
         st.header("2. Générer les menus et listes")
-        # Le bouton de génération est maintenant activé après le chargement du planning
         if st.button("Générer les Menus et Listes"):
             with st.spinner("Génération et traitement en cours..."):
                 df_menus_complet, df_ingredients_processed, df_ingredients_recettes_processed = process_data(
-                    df_planning, df_recettes_notion, df_ingredients_notion, df_ingredients_recettes_notion, id_to_name_map
+                    df_planning, df_recettes_notion, df_ingredients_notion, df_ingredients_recettes_notion
                 )
 
                 if not df_menus_complet.empty:
@@ -517,7 +518,7 @@ if uploaded_planning is not None:
                     if notion_integrate:
                         if st.button("Lancer l'intégration Notion"):
                             with st.spinner("Intégration Notion en cours..."):
-                                integrate_with_notion(df_menus_complet, DATABASE_ID_MENUS, id_to_name_map)
+                                integrate_with_notion(df_menus_complet, DATABASE_ID_MENUS)
                                 st.success("Processus d'intégration Notion terminé.")
                 else:
                     st.warning("Aucun menu n'a pu être généré. Veuillez vérifier votre fichier Planning.csv et vos données Notion.")
@@ -527,4 +528,4 @@ if uploaded_planning is not None:
 else:
     st.info("Veuillez charger le fichier Planning.csv pour activer la génération de menus.")
 
-st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
+st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud si vous ne l'avez pas déjà fait.")
