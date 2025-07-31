@@ -46,9 +46,6 @@ else:
     print("❌ Aucun fichier contenant 'planning' n'a été chargé. Veuillez réexécuter la cellule et charger le bon fichier.")
     raise RuntimeError("Fichier Planning.csv manquant.")
 
-"""**Installer API Notion**"""
-
-!pip install --upgrade notion-client
 
 """API Ingrédients"""
 
