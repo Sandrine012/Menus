@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """Générateur_complet_de_Menus_2.3.ipynb
 
@@ -9,44 +10,43 @@ Original file is located at
 **Charger fichier Planning.csv**
 """
 
-
 import pandas as pd
-
-# Recherche du fichier planning (insensible à la casse)
-planning_file = None
-for fname in uploaded.keys():
-    if 'planning' in fname.lower():
-        planning_file = fname
-        break
-
-if planning_file is not None:
-    print(f"✅ Fichier {planning_file} chargé avec succès !")
-    # Détection automatique du séparateur CSV
-    df_planning = pd.read_csv(planning_file, sep=None, engine='python')
-    print(df_planning.head())
-else:
-    print("❌ Aucun fichier contenant 'planning' n'a été chargé. Veuillez réexécuter la cellule et charger le bon fichier.")
-    raise RuntimeError("Fichier Planning.csv manquant.")
-
-
-"""API Ingrédients"""
-
-# @title
 import csv
 from notion_client import Client
-from notion_client.errors import RequestTimeoutError
+from notion_client.errors import RequestTimeoutError, APIResponseError
 import time
 import httpx
 import logging
+from datetime import datetime, timedelta
+import re
+import unicodedata
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Nom du fichier Planning.csv (assurez-vous qu'il se trouve dans le même répertoire que votre script)
+planning_file_name = "Planning.csv"
+
+try:
+    logger.info(f"Tentative de chargement du fichier {planning_file_name}...")
+    # Détection automatique du séparateur CSV
+    df_planning = pd.read_csv(planning_file_name, sep=None, engine='python')
+    logger.info(f"✅ Fichier {planning_file_name} chargé avec succès !")
+    logger.info(df_planning.head())
+except FileNotFoundError:
+    logger.critical(f"❌ Erreur: Le fichier '{planning_file_name}' n'a pas été trouvé. Assurez-vous qu'il est dans le même répertoire que votre script.")
+    raise RuntimeError(f"Fichier {planning_file_name} manquant.")
+except Exception as e:
+    logger.critical(f"❌ Erreur lors du chargement de {planning_file_name}: {e}")
+    raise RuntimeError(f"Erreur de lecture du fichier {planning_file_name}.")
+
+"""API Ingrédients"""
+
 # --- PARAMÈTRES NOTION ---
 notion = Client(auth="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")
 database_id = "b23b048b67334032ac1ae4e82d308817"
-csv_filename = "Ingredients.csv"
+csv_filename_ingredients = "Ingredients.csv" # Renommé pour éviter conflit
 num_rows_to_extract = 1000  # Limite pour les tests, modifiable
 
 batch_size = 25
@@ -110,8 +110,16 @@ def extract_property_value(prop):
     return ""
 
 try:
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+    with open(csv_filename_ingredients, 'w', newline='', encoding='utf-8') as csvfile:
         csv_writer = None
+        # Retrieve database properties to determine headers
+        db_properties = notion.databases.retrieve(database_id=database_id)["properties"]
+        # Define the order of headers
+        header = ["Page_ID", "Nom", "Type de stock", "unité", "Qte reste"]
+
+        csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, dialect='excel')
+        csv_writer.writerow(header)
+
         while total_extracted < num_rows_to_extract:
             try:
                 results = notion.databases.query(
@@ -133,26 +141,12 @@ try:
                     if total_extracted >= num_rows_to_extract:
                         break
                     properties = result.get("properties", {})
-                    if csv_writer is None:
-                        # Déterminer dynamiquement les colonnes à partir des propriétés de la première ligne
-                        # Définis ici les colonnes à inclure, dans l’ordre souhaité
-                        header = ["Page_ID", "Nom", "Type de stock", "unité", "Qte reste"]
-                        csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, dialect='excel')
-                        csv_writer.writerow(header)
-
-                        for result in page_results:
-                            properties = result.get("properties", {})
-                            row_values = [result.get("id", "")]
-                            # Pour chaque colonne, extrais la valeur correspondante
-                            row_values.append(extract_property_value(properties.get("Nom", {})))
-                            row_values.append(extract_property_value(properties.get("Type de stock", {})))
-                            row_values.append(extract_property_value(properties.get("unité", {})))
-                            row_values.append(extract_property_value(properties.get("Qte reste", {})))
-                            csv_writer.writerow(row_values)
-
-
+                    
                     row_values = [result.get("id", "")]
-                    row_values += [extract_property_value(properties[prop_name]) for prop_name in header[1:]]
+                    row_values.append(extract_property_value(properties.get("Nom", {})))
+                    row_values.append(extract_property_value(properties.get("Type de stock", {})))
+                    row_values.append(extract_property_value(properties.get("unité", {})))
+                    row_values.append(extract_property_value(properties.get("Qte reste", {})))
                     csv_writer.writerow(row_values)
 
                     total_extracted += 1
@@ -168,30 +162,26 @@ try:
             except Exception as e:
                 logger.exception(f"Erreur inattendue : {e}")
                 break
-    logger.info(f"Extraction terminée. {total_extracted} lignes exportées dans {csv_filename}.")
+    logger.info(f"Extraction terminée. {total_extracted} lignes exportées dans {csv_filename_ingredients}.")
 except IOError as e:
     logger.error(f"Erreur d'écriture du fichier : {e}")
 
-"""API Ingrédients_Recettes"""
 
-# @title
-import csv
-from notion_client import Client
-import time
+"""API Ingrédients_Recettes"""
 
 # --- PARAMÈTRES NOTION ---
 notion = Client(auth="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")
-database_id = "1d16fa46f8b2805b8377eba7bf668eb5"
-csv_filename = "Ingredients_recettes.csv"
-num_rows_to_extract = 2000  # Extraction de 2000 lignes max
+database_id_ingredients_recettes = "1d16fa46f8b2805b8377eba7bf668eb5" # Renommé pour éviter conflit
+csv_filename_ingredients_recettes = "Ingredients_recettes.csv" # Renommé pour éviter conflit
+num_rows_to_extract_ir = 2000  # Extraction de 2000 lignes max
 
-batch_size = 25
-api_timeout_seconds = 180
+batch_size_ir = 25
+api_timeout_seconds_ir = 180
 
-total_extracted = 0
-next_cursor = None
+total_extracted_ir = 0
+next_cursor_ir = None
 
-def extract_property_value(prop):
+def extract_property_value_ir(prop):
     if not isinstance(prop, dict):
         return ""
     t = prop.get("type")
@@ -245,17 +235,17 @@ def extract_property_value(prop):
     return ""
 
 try:
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+    with open(csv_filename_ingredients_recettes, 'w', newline='', encoding='utf-8') as csvfile:
         header = ["Page_ID", "Qté/pers_s", "Ingrédient ok", "Type de stock f"]
         csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, dialect='excel')
         csv_writer.writerow(header)
 
-        while total_extracted < num_rows_to_extract:
+        while total_extracted_ir < num_rows_to_extract_ir:
             results = notion.databases.query(
-                database_id=database_id,
-                start_cursor=next_cursor,
-                page_size=batch_size,
-                timeout=api_timeout_seconds,
+                database_id=database_id_ingredients_recettes,
+                start_cursor=next_cursor_ir,
+                page_size=batch_size_ir,
+                timeout=api_timeout_seconds_ir,
                 filter={
                     "property": "Type de stock f",
                     "formula": {"string": {"equals": "Autre type"}}
@@ -263,11 +253,11 @@ try:
             )
             page_results = results.get("results", [])
             if not page_results:
-                print("Aucun résultat trouvé avec le filtre 'Autre type'")
+                logger.info("Aucun résultat trouvé avec le filtre 'Autre type'")
                 break
 
             for result in page_results:
-                if total_extracted >= num_rows_to_extract:
+                if total_extracted_ir >= num_rows_to_extract_ir:
                     break
                 properties = result.get("properties", {})
 
@@ -284,14 +274,14 @@ try:
                             parent_id = relations[0].get("id", "")
                     else:
                         # Si ce n'est pas une relation, extraire la valeur comme texte
-                        parent_id = extract_property_value(element_parent_property)
+                        parent_id = extract_property_value_ir(element_parent_property)
 
                 # Si aucun parent_id n'est trouvé, utiliser l'ID de la page actuelle comme fallback
                 if not parent_id:
                     parent_id = result.get("id", "")
-                    print(f"Attention: Élément parent non trouvé pour {result.get('id')}, utilisation de l'ID de page comme fallback")
+                    logger.warning(f"Attention: Élément parent non trouvé pour {result.get('id')}, utilisation de l'ID de page comme fallback")
 
-                qte_str = extract_property_value(properties.get("Qté/pers_s", {}))
+                qte_str = extract_property_value_ir(properties.get("Qté/pers_s", {}))
                 try:
                     qte = float(qte_str.replace(",", "."))
                 except (ValueError, AttributeError):
@@ -300,53 +290,39 @@ try:
                     row_values = [
                         parent_id,  # Utiliser l'ID de l'élément parent au lieu de l'ID de la page
                         qte_str,
-                        extract_property_value(properties.get("Ingrédient ok", {})),
-                        extract_property_value(properties.get("Type de stock f", {}))
+                        extract_property_value_ir(properties.get("Ingrédient ok", {})),
+                        extract_property_value_ir(properties.get("Type de stock f", {}))
                     ]
                     csv_writer.writerow(row_values)
-                    total_extracted += 1
+                    total_extracted_ir += 1
 
-            next_cursor = results.get("next_cursor")
-            if not next_cursor:
+            next_cursor_ir = results.get("next_cursor")
+            if not next_cursor_ir:
                 break
             time.sleep(1)
-    print(f"Extraction terminée. {total_extracted} lignes exportées dans {csv_filename}.")
+    logger.info(f"Extraction terminée. {total_extracted_ir} lignes exportées dans {csv_filename_ingredients_recettes}.")
 except Exception as e:
-    print(f"Erreur : {e}")
+    logger.error(f"Erreur : {e}")
 
 """**API Recettes**"""
 
-import csv
-import time
-import logging
-from notion_client import Client
-from notion_client.errors import RequestTimeoutError, APIResponseError
-import httpx # notion_client peut lever des erreurs httpx
-
-# ========== CONFIGURATION DU LOGGING ==========
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
-
 # ========== CONFIGURATION NOTION ==========
 NOTION_API_KEY = "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"
-DATABASE_ID    = "1d16fa46f8b2805b8377eba7bf668eb5"
+DATABASE_ID_RECETTES    = "1d16fa46f8b2805b8377eba7bf668eb5" # Renommé pour éviter conflit
 SAISON_FILTRE  = "Printemps"
 
 notion = Client(auth=NOTION_API_KEY)
 logger.info("Client Notion initialisé.")
-logger.info(f"ID de la base de données cible : {DATABASE_ID}")
+logger.info(f"ID de la base de données cible : {DATABASE_ID_RECETTES}")
 if SAISON_FILTRE:
     logger.info(f"Saison pour le filtre dynamique : {SAISON_FILTRE}")
 
 # ========== PARAMÈTRES D'EXTRACTION ==========
-csv_filename         = "Recettes.csv" # Votre nom de fichier original
-num_rows_to_extract  = 400
-batch_size           = 50
-max_retries          = 3
-retry_delay_initial  = 5
+csv_filename_recettes         = "Recettes.csv" # Renommé pour éviter conflit
+num_rows_to_extract_recettes  = 400
+batch_size_recettes           = 50
+max_retries_recettes          = 3
+retry_delay_initial_recettes  = 5
 
 # ========== DÉFINITION DU FILTRE (Noms vérifiés par rapport à votre liste) ==========
 filter_conditions = [
@@ -366,28 +342,25 @@ filter_conditions = [
         ]
     }
 ]
-filter_recettes = {"and": filter_conditions}
-logger.info(f"Filtre API Notion : {filter_recettes}")
+filter_recettes_api = {"and": filter_conditions} # Renommé pour éviter conflit
+logger.info(f"Filtre API Notion : {filter_recettes_api}")
 
 
 # ========== EN-TÊTE CSV (modifiée pour exclure Ingredients_quantite) ==========
-header_csv = [
-    "Page_ID", "Nom", "ID_Recette", "Saison", # "Ingredients_quantite" supprimé
+header_csv_recettes = [ # Renommé pour éviter conflit
+    "Page_ID", "Nom", "ID_Recette", "Saison",
     "Calories", "Proteines", "Temps_total", "Aime_pas_princip",
     "Type_plat", "Transportable"
 ]
 
 # ========== FONCTION D'EXTRACTION DE PROPRIÉTÉS (Identique à la version précédente) ==========
 def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key):
-    # ... (la fonction get_property_value reste la même que dans le message précédent)
     if not prop_data: return ""
     prop_type = prop_data.get("type")
 
     try:
         if expected_format_key == "title":
             return "".join(t.get("text", {}).get("content", "") for t in prop_data.get("title", []))
-        # "rollup_text_concat" n'est plus utilisé car Ingredients_quantite est supprimé,
-        # mais on le garde au cas où une autre colonne aurait besoin de ce formatage.
         elif expected_format_key == "rollup_text_concat":
             if prop_type == "rollup":
                 arr = prop_data.get("rollup", {}).get("array", [])
@@ -455,12 +428,10 @@ def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key)
     return ""
 
 # ========== PROCESSUS D'EXTRACTION ET ÉCRITURE CSV ==========
-total_extracted_and_written = 0
-next_cursor = None
-start_time = time.time()
+total_extracted_and_written_recettes = 0 # Renommé pour éviter conflit
+next_cursor_recettes = None # Renommé pour éviter conflit
+start_time_recettes = time.time() # Renommé pour éviter conflit
 
-# Noms de propriétés Notion vérifiés par rapport à votre liste du 06/06/2025 09:01
-# "Ingredients_quantite" supprimé du mapping
 csv_to_notion_mapping = {
     "Page_ID":              (None, "page_id_special"),
     "Nom":                  ("Nom_plat", "title"),
@@ -474,48 +445,48 @@ csv_to_notion_mapping = {
     "Transportable":        ("Transportable", "select_to_oui_empty")
 }
 
-logger.info(f"Ouverture du fichier '{csv_filename}' pour écriture.")
-with open(csv_filename, "w", newline="", encoding="utf-8") as csvfile:
+logger.info(f"Ouverture du fichier '{csv_filename_recettes}' pour écriture.")
+with open(csv_filename_recettes, "w", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(header_csv)
+    writer.writerow(header_csv_recettes)
 
-    pages_retrieved_from_api_total = 0
+    pages_retrieved_from_api_total_recettes = 0 # Renommé pour éviter conflit
 
-    while total_extracted_and_written < num_rows_to_extract:
+    while total_extracted_and_written_recettes < num_rows_to_extract_recettes:
         retries = 0
-        current_retry_delay = retry_delay_initial
+        current_retry_delay = retry_delay_initial_recettes
 
         try:
-            query_params = {"database_id": DATABASE_ID, "filter": filter_recettes, "page_size": batch_size}
-            if next_cursor: query_params["start_cursor"] = next_cursor
+            query_params = {"database_id": DATABASE_ID_RECETTES, "filter": filter_recettes_api, "page_size": batch_size_recettes}
+            if next_cursor_recettes: query_params["start_cursor"] = next_cursor_recettes
 
-            logger.info(f"Appel API Notion (Curseur: {next_cursor or 'aucun'}).")
+            logger.info(f"Appel API Notion (Curseur: {next_cursor_recettes or 'aucun'}).")
             response = notion.databases.query(**query_params)
 
             pages_batch = response.get("results", [])
-            pages_retrieved_from_api_total += len(pages_batch)
-            logger.info(f"API a retourné {len(pages_batch)} pages pour ce lot. (Total API: {pages_retrieved_from_api_total})")
+            pages_retrieved_from_api_total_recettes += len(pages_batch)
+            logger.info(f"API a retourné {len(pages_batch)} pages pour ce lot. (Total API: {pages_retrieved_from_api_total_recettes})")
 
-            next_cursor = response.get("next_cursor")
+            next_cursor_recettes = response.get("next_cursor")
 
         except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout) as e:
-            retries += 1; logger.warning(f"Timeout API (tentative {retries}/{max_retries}). Attente {current_retry_delay}s...")
-            if retries >= max_retries: logger.error(f"Max timeouts atteints. Abandon."); break
+            retries += 1; logger.warning(f"Timeout API (tentative {retries}/{max_retries_recettes}). Attente {current_retry_delay}s...")
+            if retries >= max_retries_recettes: logger.error(f"Max timeouts atteints. Abandon."); break
             time.sleep(current_retry_delay); current_retry_delay = min(current_retry_delay*2, 60); continue
         except APIResponseError as e:
             logger.error(f"Erreur API Notion: {e.code} - {e.message}.")
             if e.code in ["validation_error", "invalid_json", "unauthorized", "restricted_resource"]: logger.error("Erreur API non récupérable. Abandon."); break
-            retries += 1; logger.warning(f"Erreur API (tentative {retries}/{max_retries}). Attente {current_retry_delay}s...")
-            if retries >= max_retries: logger.error(f"Max erreurs API atteintes. Abandon."); break
+            retries += 1; logger.warning(f"Erreur API (tentative {retries}/{max_retries_recettes}). Attente {current_retry_delay}s...")
+            if retries >= max_retries_recettes: logger.error(f"Max erreurs API atteintes. Abandon."); break
             time.sleep(current_retry_delay); current_retry_delay = min(current_retry_delay*2, 60); continue
         except Exception as e:
             logger.error(f"Erreur inattendue: {e}", exc_info=True); break
 
         if not pages_batch:
-            if pages_retrieved_from_api_total == 0:
+            if pages_retrieved_from_api_total_recettes == 0:
                  logger.critical("!!! AUCUNE PAGE RETOURNÉE PAR L'API AVEC LE FILTRE ACTUEL !!!")
                  logger.critical("Cause probable : Noms de propriétés incorrects dans le filtre OU conditions du filtre trop restrictives OU permissions de l'intégration.")
-                 logger.critical(f"Filtre utilisé : {filter_recettes}")
+                 logger.critical(f"Filtre utilisé : {filter_recettes_api}")
             else:
                  logger.info("Plus de pages à récupérer de l'API.")
             break
@@ -524,7 +495,7 @@ with open(csv_filename, "w", newline="", encoding="utf-8") as csvfile:
         for page in pages_batch:
             page_props_raw = page.get("properties", {})
             row_to_write = []
-            for csv_col_name in header_csv: # Itère sur le header_csv qui n'a plus Ingredients_quantite
+            for csv_col_name in header_csv_recettes:
                 notion_prop_name_key, expected_format_key = csv_to_notion_mapping[csv_col_name]
                 if csv_col_name == "Page_ID": row_to_write.append(page.get("id", ""))
                 else:
@@ -534,57 +505,38 @@ with open(csv_filename, "w", newline="", encoding="utf-8") as csvfile:
                     value = get_property_value(raw_prop_data, notion_prop_name_key, expected_format_key)
                     row_to_write.append(value)
 
-            # La condition de saut sur Ingredients_quantite n'est plus nécessaire
             writer.writerow(row_to_write)
             rows_written_this_batch +=1
-            total_extracted_and_written += 1
-            if total_extracted_and_written >= num_rows_to_extract: break
+            total_extracted_and_written_recettes += 1
+            if total_extracted_and_written_recettes >= num_rows_to_extract_recettes: break
 
-        logger.info(f"{rows_written_this_batch} lignes écrites au CSV pour ce lot. Total écrit: {total_extracted_and_written}.")
+        logger.info(f"{rows_written_this_batch} lignes écrites au CSV pour ce lot. Total écrit: {total_extracted_and_written_recettes}.")
 
-        if not next_cursor or total_extracted_and_written >= num_rows_to_extract:
+        if not next_cursor_recettes or total_extracted_and_written_recettes >= num_rows_to_extract_recettes:
             logger.info("Fin (plus de pages ou limite atteinte).")
             break
         time.sleep(0.35)
 
-duration = time.time() - start_time
-logger.info(f"Terminé en {duration:.2f}s. {total_extracted_and_written} recettes écrites dans '{csv_filename}'.")
-if total_extracted_and_written == 0 :
-    if pages_retrieved_from_api_total == 0:
+duration_recettes = time.time() - start_time_recettes
+logger.info(f"Terminé en {duration_recettes:.2f}s. {total_extracted_and_written_recettes} recettes écrites dans '{csv_filename_recettes}'.")
+if total_extracted_and_written_recettes == 0 :
+    if pages_retrieved_from_api_total_recettes == 0:
         logger.error("RÉSUMÉ FINAL : AUCUNE page récupérée de l'API ET AUCUNE ligne écrite. Le problème est très certainement le FILTRE API ou les PERMISSIONS.")
-    # Si pages_retrieved_from_api_total > 0 mais total_extracted_and_written == 0,
-    # cela indiquerait un problème dans la boucle d'écriture ou de formatage qui vide toutes les lignes,
-    # mais sans le filtre Ingredients_quantite, c'est moins probable.
 
 """**API Menus**"""
 
-# @title
-import csv
-from notion_client import Client
-from notion_client.errors import RequestTimeoutError # Importer l'erreur spécifique
-import time
-import httpx # Garder pour le type hint ou si on attrape les deux
-import re
-import unicodedata
-import logging
-from datetime import datetime
-
-# Configuration du logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 # --- VOS PARAMETRES NOTION ---
 notion = Client(auth="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")
-database_id = "9025cfa1c18d4501a91dbeb1b10b48bd"  # ID de la base de données corrigé
+database_id_menus = "9025cfa1c18d4501a91dbeb1b10b48bd"  # ID de la base de données corrigé
 logger.info("Client Notion initialisé.")
-logger.info(f"ID de la base de données: {database_id}")
+logger.info(f"ID de la base de données: {database_id_menus}")
 # --- FIN PARAMETRES NOTION ---
 
 # Nom du fichier CSV de sortie
-csv_filename = "Menus.csv"
+csv_filename_menus = "Menus.csv" # Renommé pour éviter conflit
 
 # Nombre de lignes VALIDES à extraire
-num_rows_to_extract = 100000
+num_rows_to_extract_menus = 100000 # Renommé pour éviter conflit
 
 # --- NOMS DES PROPRIÉTÉS NOTION (À MODIFIER ICI SI NÉCESSAIRE) ---
 nom_menu_property_name = "Nom Menu"
@@ -593,57 +545,55 @@ date_property_name = "Date"
 # --- FIN DES NOMS DE PROPRIÉTÉS NOTION ---
 
 # --- PARAMÈTRES AJUSTÉS ---
-next_cursor = None
-batch_size = 25
-max_retries = 7
-retry_delay = 10 # Le délai initial
-retries = 0
-api_timeout_seconds = 180 # Gardons 3 minutes pour l'instant
+next_cursor_menus = None # Renommé pour éviter conflit
+batch_size_menus = 25 # Renommé pour éviter conflit
+max_retries_menus = 7 # Renommé pour éviter conflit
+retry_delay_menus = 10 # Le délai initial # Renommé pour éviter conflit
+retries_menus = 0 # Renommé pour éviter conflit
+api_timeout_seconds_menus = 180 # Gardons 3 minutes pour l'instant # Renommé pour éviter conflit
 # --- FIN PARAMÈTRES AJUSTÉS ---
 
-total_extracted = 0
-start_time_global = time.time()
+total_extracted_menus = 0 # Renommé pour éviter conflit
+start_time_global_menus = time.time() # Renommé pour éviter conflit
 
-logger.info(f"Début de l'extraction de jusqu'à {num_rows_to_extract} menus ({nom_menu_property_name}, {recette_property_name}, {date_property_name}) vers '{csv_filename}'...")
-logger.info(f"Paramètres API: batch_size={batch_size}, timeout={api_timeout_seconds}, max_retries={max_retries}")
+logger.info(f"Début de l'extraction de jusqu'à {num_rows_to_extract_menus} menus ({nom_menu_property_name}, {recette_property_name}, {date_property_name}) vers '{csv_filename_menus}'...")
+logger.info(f"Paramètres API: batch_size={batch_size_menus}, timeout={api_timeout_seconds_menus}, max_retries={max_retries_menus}")
 
 try:
     # --- TEST DE CONNEXION INITIALE À LA BASE DE DONNÉES ---
     try:
-        database_info = notion.databases.retrieve(database_id)
+        database_info = notion.databases.retrieve(database_id_menus)
         logger.info(f"Informations de la base de données récupérées avec succès: {database_info.get('title')}")
     except Exception as e:
         logger.error(f"Erreur lors de la récupération des informations de la base de données initiale. Vérifiez votre jeton et l'ID de la base de données : {e}")
         exit()
     # --- FIN TEST DE CONNEXION INITIALE ---
 
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+    with open(csv_filename_menus, 'w', newline='', encoding='utf-8') as csvfile:
         csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, dialect='excel')
-        header = [nom_menu_property_name, recette_property_name, date_property_name]  # Utilisation des variables pour l'en-tête
+        header = [nom_menu_property_name, recette_property_name, date_property_name]
         csv_writer.writerow(header)
 
-        while total_extracted < num_rows_to_extract:
+        while total_extracted_menus < num_rows_to_extract_menus:
             page_start_time = time.time()
             try:
-                request_batch_size = batch_size
-                logger.debug(f"Demande à Notion: start_cursor={next_cursor}, page_size={request_batch_size}")
+                request_batch_size = batch_size_menus
+                logger.debug(f"Demande à Notion: start_cursor={next_cursor_menus}, page_size={request_batch_size}")
 
                 results = notion.databases.query(
-                    database_id=database_id,
-                    start_cursor=next_cursor,
+                    database_id=database_id_menus,
+                    start_cursor=next_cursor_menus,
                     page_size=request_batch_size,
                     filter={
                         "and": [
-                            # --- AJOUT DU FILTRE SUR RECETTE NON VIDE ---
-                            {"property": recette_property_name, "relation": {"is_not_empty": True}}, # Utilisation de la variable
+                            {"property": recette_property_name, "relation": {"is_not_empty": True}},
                         ]
                     },
-                    timeout=api_timeout_seconds
+                    timeout=api_timeout_seconds_menus
                 )
 
-                # Si la requête réussit, réinitialiser les compteurs de tentative
-                retries = 0
-                retry_delay = 10 # Réinitialiser le délai de base
+                retries_menus = 0
+                retry_delay_menus = 10
 
                 page_results = results.get("results", [])
                 if not page_results:
@@ -654,33 +604,30 @@ try:
                 page_valid_count = 0
 
                 for result in page_results:
-                    if total_extracted >= num_rows_to_extract:
-                        break # Sortir si limite atteinte
+                    if total_extracted_menus >= num_rows_to_extract_menus:
+                        break
 
                     row_values = []
                     properties = result.get("properties", {})
 
                     # 1. Nom Menu
                     nom_menu_value = ""
-                    if nom_menu_property_name in properties: # Utilisation de la variable
-                        name_property = properties[nom_menu_property_name] # Utilisation de la variable
+                    if nom_menu_property_name in properties:
+                        name_property = properties[nom_menu_property_name]
                         nom_menu_value = "".join([text.get("plain_text", "") for text in name_property.get("title", []) or name_property.get("rich_text", [])])
                     row_values.append(nom_menu_value.strip())
 
                     # 2. Recette (Gestion de la relation - Extraction des IDs)
                     recette_value = ""
-                    if recette_property_name in properties: # Utilisation de la variable
-                        prop = properties[recette_property_name] # Utilisation de la variable
-                        # Si c'est une relation directe
+                    if recette_property_name in properties:
+                        prop = properties[recette_property_name]
                         if prop["type"] == "relation" and prop["relation"]:
                             recette_value = ", ".join([relation["id"] for relation in prop["relation"]])
-                        # Si c'est un rollup de type array (agrégation de relations)
                         elif prop["type"] == "rollup" and prop["rollup"]:
                             rollup_data = prop["rollup"]
                             if rollup_data.get("type") == "array" and rollup_data.get("array"):
                                 recette_ids = []
                                 for item in rollup_data["array"]:
-                                    # Les items de rollup de relation sont eux-mêmes des objets relation
                                     if item.get("id"):
                                         recette_ids.append(item["id"])
                                     elif item.get("relation"):
@@ -690,82 +637,74 @@ try:
 
                     # 3. Date (Formatage de la date)
                     date_value = ""
-                    if date_property_name in properties: # Utilisation de la variable
-                        date_property = properties[date_property_name] # Utilisation de la variable
+                    if date_property_name in properties:
+                        date_property = properties[date_property_name]
                         if date_property["type"] == "date" and date_property.get("date") and date_property["date"].get("start"):
                             date_str = date_property["date"]["start"]
-                            # Convertir la chaîne de date ISO 8601 en format de base (YYYY-MM-DD)
                             date_object = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                             date_value = date_object.strftime('%Y-%m-%d')
                     row_values.append(date_value)
 
                     csv_writer.writerow(row_values)
-                    total_extracted += 1
+                    total_extracted_menus += 1
                     page_valid_count += 1
 
                 page_end_time = time.time()
-                logger.info(f"Page traitée en {page_end_time - page_start_time:.2f} sec. {page_valid_count} menus ajoutés (Total: {total_extracted}/{num_rows_to_extract}).")
+                logger.info(f"Page traitée en {page_end_time - page_start_time:.2f} sec. {page_valid_count} menus ajoutés (Total: {total_extracted_menus}/{num_rows_to_extract_menus}).")
 
-                if total_extracted >= num_rows_to_extract:
-                    logger.info(f"Limite de {num_rows_to_extract} menus atteinte.")
+                if total_extracted_menus >= num_rows_to_extract_menus:
+                    logger.info(f"Limite de {num_rows_to_extract_menus} menus atteinte.")
                     break
-                next_cursor = results.get("next_cursor")
-                if not next_cursor:
+                next_cursor_menus = results.get("next_cursor")
+                if not next_cursor_menus:
                     logger.info("Fin des pages retournées par l'API (next_cursor est None).")
                     break
 
-                logger.info(f"Passage à la page suivante (next_cursor: {str(next_cursor)[:10]}...).")
-                time.sleep(1) # Pause entre les pages
+                logger.info(f"Passage à la page suivante (next_cursor: {str(next_cursor_menus)[:10]}...).")
+                time.sleep(1)
 
-            except (httpx.TimeoutException, RequestTimeoutError) as e: # Attrape les deux types de timeout
-                retries += 1
-                logger.warning(f"Timeout détecté ({type(e).__name__}). Tentative {retries}/{max_retries}...")
-                if retries >= max_retries:
-                    logger.error(f"Nombre maximum de tentatives atteint ({max_retries}) après Timeout. Abandon.")
-                    break # Arrêter la boucle while si max_retries atteint
+            except (httpx.TimeoutException, RequestTimeoutError) as e:
+                retries_menus += 1
+                logger.warning(f"Timeout détecté ({type(e).__name__}). Tentative {retries_menus}/{max_retries_menus}...")
+                if retries_menus >= max_retries_menus:
+                    logger.error(f"Nombre maximum de tentatives atteint ({max_retries_menus}) après Timeout. Abandon.")
+                    break
 
-                logger.warning(f"Attente de {retry_delay} secondes avant la nouvelle tentative...")
-                time.sleep(retry_delay)
-                retry_delay *= 2 # Augmenter le délai pour la prochaine fois (backoff exponentiel)
-                continue # Recommencer la tentative pour cette page (le début du bloc try)
+                logger.warning(f"Attente de {retry_delay_menus} secondes avant la nouvelle tentative...")
+                time.sleep(retry_delay_menus)
+                retry_delay_menus *= 2
+                continue
 
             except Exception as e:
                 logger.exception(f"Une erreur inattendue et non liée au timeout est survenue pendant la boucle : {e}")
-                break # Arrêter en cas d'erreur grave imprévue
+                break
 
 except IOError as e:
-    logger.error(f"Erreur: Impossible d'écrire dans le fichier '{csv_filename}'. {e}")
+    logger.error(f"Erreur: Impossible d'écrire dans le fichier '{csv_filename_menus}'. {e}")
 except Exception as e:
     logger.exception(f"Erreur générale avant la boucle principale : {e}")
 
-# --- Message final ---
-end_time_global = time.time()
-total_duration = end_time_global - start_time_global
-final_message = f"Extraction terminée en {total_duration:.2f} secondes. {total_extracted} menus ({nom_menu_property_name}, {recette_property_name}, {date_property_name}) "
-if total_extracted < num_rows_to_extract and next_cursor is None:
-    final_message += f"trouvés (toute la base de données a été parcourue) et sauvegardés dans '{csv_filename}'"
-elif total_extracted < num_rows_to_extract:
-    final_message += f"trouvés (moins que les {num_rows_to_extract} demandées, possible arrêt prématuré ou erreur) et sauvegardés dans '{csv_filename}'"
+end_time_global_menus = time.time()
+total_duration_menus = end_time_global_menus - start_time_global_menus
+final_message_menus = f"Extraction terminée en {total_duration_menus:.2f} secondes. {total_extracted_menus} menus ({nom_menu_property_name}, {recette_property_name}, {date_property_name}) "
+if total_extracted_menus < num_rows_to_extract_menus and next_cursor_menus is None:
+    final_message_menus += f"trouvés (toute la base de données a été parcourue) et sauvegardés dans '{csv_filename_menus}'"
+elif total_extracted_menus < num_rows_to_extract_menus:
+    final_message_menus += f"trouvés (moins que les {num_rows_to_extract_menus} demandées, possible arrêt prématuré ou erreur) et sauvegardés dans '{csv_filename_menus}'"
 else:
-    final_message += f"sauvegardés dans '{csv_filename}'"
-print(final_message)
-logger.info(final_message)
+    final_message_menus += f"sauvegardés dans '{csv_filename_menus}'"
+print(final_message_menus)
+logger.info(final_message_menus)
 
 """**Générateur de Menus**"""
 
-# @title
-import pandas as pd
-import random
-import logging
-from datetime import datetime, timedelta # Assurez-vous que timedelta est importé
-
 # Constantes globales
 NB_JOURS_ANTI_REPETITION = 42
-FICHIER_RECETTES = "Recettes.csv"
-FICHIER_PLANNING = "Planning.csv"
-FICHIER_MENUS = "Menus.csv" # Pour l'historique
-FICHIER_INGREDIENTS = "Ingredients.csv" # Assurez-vous que ce nom est correct
-FICHIER_INGREDIENTS_RECETTES = "Ingredients_recettes.csv" # Assurez-vous que ce nom est correct
+# FICHIER_PLANNING est déjà défini et chargé
+FICHIER_RECETTES = csv_filename_recettes
+FICHIER_MENUS = csv_filename_menus # Pour l'historique
+FICHIER_INGREDIENTS = csv_filename_ingredients
+FICHIER_INGREDIENTS_RECETTES = csv_filename_ingredients_recettes
 FICHIER_SORTIE_MENU_CSV = "Menu_genere.csv"
 FICHIER_SORTIE_LISTES_TXT = "recapitulatif_ingredients.txt" # Pour toutes les listes
 
@@ -780,8 +719,7 @@ TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
-logger = logging.getLogger(__name__)
+# Logging déjà configuré globalement
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     colonnes_manquantes = [col for col in colonnes_attendues if col not in df.columns]
@@ -884,7 +822,7 @@ class RecetteManager:
         total_ingredients_definis = len(ingredients_necessaires)
         ingredients_disponibles_compteur = 0
         score_total_dispo = 0
-        ingredients_manquants = {} # NOUVEAU
+        ingredients_manquants = {}
 
         for ing_id, qte_necessaire in ingredients_necessaires.items():
             ing_id_str = str(ing_id)
@@ -907,12 +845,12 @@ class RecetteManager:
                 ingredients_disponibles_compteur += 1
             else:
                 qte_manquante = max(0, qte_necessaire - qte_en_stock)
-                ingredients_manquants[ing_id_str] = qte_manquante # Enregistrer les manquants
+                ingredients_manquants[ing_id_str] = qte_manquante
 
         score_moyen_dispo = score_total_dispo / total_ingredients_definis if total_ingredients_definis > 0 else 0
         pourcentage_dispo = (ingredients_disponibles_compteur / total_ingredients_definis) * 100 if total_ingredients_definis > 0 else 0
 
-        return score_moyen_dispo, pourcentage_dispo, ingredients_manquants # Retourner les manquants
+        return score_moyen_dispo, pourcentage_dispo, ingredients_manquants
 
     def ajuster_stock_simule(self, recette_id_str, nb_personnes):
         ingredients_necessaires = self.calculer_quantite_necessaire(recette_id_str, nb_personnes)
@@ -921,20 +859,16 @@ class RecetteManager:
             idx = self.stock_simule[self.stock_simule[COLONNE_ID_INGREDIENT].astype(str) == ing_id_str].index
             if not idx.empty:
                 self.stock_simule.loc[idx, "Qte reste"] -= qte_necessaire
-                # S'assurer que le stock ne devient pas négatif
                 self.stock_simule.loc[idx, "Qte reste"] = self.stock_simule.loc[idx, "Qte reste"].apply(lambda x: max(0, x))
             else:
                 logger.warning(f"Ingrédient {ing_id_str} de la recette {recette_id_str} non trouvé dans le stock simule pour ajustement.")
 
     def _recuperer_nom_ingredient(self, ingredient_id):
-        # Assurez-vous que COLONNE_ID_INGREDIENT est un Page_ID ou un ID unique
-        # et que "Nom" est le nom de la colonne des noms dans df_ingredients_initial
         if not (COLONNE_ID_INGREDIENT in self.df_ingredients_initial.columns and "Nom" in self.df_ingredients_initial.columns):
             logger.error(f"Colonnes essentielles manquantes dans df_ingredients_initial: '{COLONNE_ID_INGREDIENT}' ou 'Nom'.")
             return f"Nom inconnu ({ingredient_id})"
 
         try:
-            # Conversion en str pour la comparaison pour éviter les problèmes de type
             ingredient_info = self.df_ingredients_initial[
                 self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == str(ingredient_id)
             ]
@@ -947,12 +881,10 @@ class RecetteManager:
     def generer_liste_courses(self, menu_genere_df, planning_df):
         logger.info("Début de la génération de la liste de courses.")
         liste_courses = {}
-        ingredients_par_repas = {} # Pour le récapitulatif détaillé
+        ingredients_par_repas = {}
 
-        # Renommer 'ID_Recette' en 'Recette ID' pour unifier avec les IDs de Menus
         df_recettes_temp = self.df_recettes.rename(columns={"ID_Recette": "Recette ID"})
 
-        # Joindre le menu généré avec les recettes pour obtenir les IDs de recettes
         menu_avec_ids = pd.merge(
             menu_genere_df,
             df_recettes_temp[[COLONNE_NOM, "Recette ID"]].drop_duplicates(subset=[COLONNE_NOM]),
@@ -960,7 +892,6 @@ class RecetteManager:
             how='left'
         )
 
-        # Ajouter la colonne Participants du planning au menu généré
         menu_avec_ids = pd.merge(
             menu_avec_ids,
             planning_df[['Date', 'Participant(s)']],
@@ -969,10 +900,9 @@ class RecetteManager:
         )
         menu_avec_ids['Participant(s)'] = pd.to_numeric(menu_avec_ids['Participant(s)'], errors='coerce').fillna(0).astype(int)
 
-        # Assurez-vous que la colonne 'Recette ID' est présente et non vide
         if 'Recette ID' not in menu_avec_ids.columns or menu_avec_ids['Recette ID'].isnull().all():
             logger.error("La colonne 'Recette ID' est manquante ou vide après jointure. Vérifiez le nom de colonne et les données de Recettes.csv.")
-            return {}, {} # Retourne des dictionnaires vides si erreur critique
+            return {}, {}
 
         for index, row in menu_avec_ids.iterrows():
             recette_id = str(row["Recette ID"])
@@ -991,27 +921,28 @@ class RecetteManager:
                 nom_ingredient = self._recuperer_nom_ingredient(ing_id)
                 ing_info_df = self.df_ingredients_initial[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == str(ing_id)]
 
+                qte_en_stock = 0.0
+                unite = "unité"
+                type_stock = "Inconnu"
+
                 if not ing_info_df.empty:
                     unite = ing_info_df["unité"].iloc[0]
                     type_stock = ing_info_df["Type de stock"].iloc[0]
                     qte_en_stock = float(ing_info_df["Qte reste"].iloc[0])
 
-                    qte_achetee = 0.0
-                    if qte_necessaire > qte_en_stock:
-                        qte_achetee = qte_necessaire - qte_en_stock
-                        logger.debug(f"Besoin d'acheter {qte_achetee:.2f} {unite} de {nom_ingredient} (stock: {qte_en_stock}, nécessaire: {qte_necessaire}).")
+                qte_achetee = 0.0
+                if qte_necessaire > qte_en_stock:
+                    qte_achetee = qte_necessaire - qte_en_stock
+                    logger.debug(f"Besoin d'acheter {qte_achetee:.2f} {unite} de {nom_ingredient} (stock: {qte_en_stock}, nécessaire: {qte_necessaire}).")
 
-                    if qte_achetee > 0:
-                        if nom_ingredient not in liste_courses:
-                            liste_courses[nom_ingredient] = {"quantite": 0.0, "unite": unite, "type_stock": type_stock}
-                        liste_courses[nom_ingredient]["quantite"] += qte_achetee
-                else:
-                    logger.warning(f"Ingrédient {nom_ingredient} (ID: {ing_id}) non trouvé dans la base des ingrédients initiaux. Ajout direct à la liste de courses.")
+                if qte_achetee > 0:
                     if nom_ingredient not in liste_courses:
-                        liste_courses[nom_ingredient] = {"quantite": 0.0, "unite": "unité", "type_stock": "Inconnu"} # Unités par défaut
-                    liste_courses[nom_ingredient]["quantite"] += qte_necessaire
+                        liste_courses[nom_ingredient] = {"quantite": 0.0, "unite": unite, "type_stock": type_stock}
+                    liste_courses[nom_ingredient]["quantite"] += qte_achetee
+                else:
+                    logger.debug(f"Ingrédient {nom_ingredient} suffisant en stock. Pas d'achat.")
 
-                # Pour le récapitulatif détaillé par repas
+
                 if date_repas not in ingredients_par_repas:
                     ingredients_par_repas[date_repas] = {}
                 if nom_repas not in ingredients_par_repas[date_repas]:
@@ -1019,9 +950,9 @@ class RecetteManager:
                 ingredients_par_repas[date_repas][nom_repas].append({
                     "nom": nom_ingredient,
                     "qte_necessaire": qte_necessaire,
-                    "unite": unite if 'unite' in locals() else "unité",
-                    "qte_en_stock": qte_en_stock if 'qte_en_stock' in locals() else 0,
-                    "qte_achetee": qte_achetee if 'qte_achetee' in locals() else 0
+                    "unite": unite,
+                    "qte_en_stock": qte_en_stock,
+                    "qte_achetee": qte_achetee
                 })
 
         logger.info("Génération de la liste de courses terminée.")
@@ -1032,9 +963,8 @@ class MenuGenerator:
         self.df_planning = df_planning.copy()
         self.df_recettes = df_recettes.copy()
         self.df_menus_historique = df_menus_historique.copy()
-        self.recette_manager = recette_manager # Utilisation de la classe RecetteManager
+        self.recette_manager = recette_manager
 
-        # Nettoyage et conversion des colonnes clés
         self._preparer_donnees()
 
     def _preparer_donnees(self):
@@ -1043,16 +973,18 @@ class MenuGenerator:
         self.df_planning = self.df_planning.dropna(subset=['Date'])
         self.df_planning['Participant(s)'] = pd.to_numeric(self.df_planning['Participant(s)'], errors='coerce').fillna(1).astype(int)
 
-        # Recettes: Assurez-vous que les colonnes existent avant d'essayer d'y accéder
-        colonnes_recettes_req = [COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_ID_RECETTE, "Calories", "Proteines", "Type_plat", COLONNE_AIME_PAS_PRINCIP]
+        # Recettes: Assurez-vous que les colonnes existent avant d'y accéder
+        colonnes_recettes_req = [COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_ID_RECETTE, "Calories", "Proteines", "Type_plat", COLONNE_AIME_PAS_PRINCIP, "Transportable"]
         verifier_colonnes(self.df_recettes, colonnes_recettes_req, FICHIER_RECETTES)
 
-        self.df_recettes = self.df_recettes.copy() # Éviter SettingWithCopyWarning
+        self.df_recettes = self.df_recettes.copy()
         self.df_recettes[COLONNE_TEMPS_TOTAL] = pd.to_numeric(self.df_recettes[COLONNE_TEMPS_TOTAL], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
-        # Convertir les colonnes ID_Recette en string
         self.df_recettes[COLONNE_ID_RECETTE] = self.df_recettes[COLONNE_ID_RECETTE].astype(str)
         self.df_recettes['Calories'] = pd.to_numeric(self.df_recettes['Calories'], errors='coerce').fillna(0)
         self.df_recettes['Proteines'] = pd.to_numeric(self.df_recettes['Proteines'], errors='coerce').fillna(0)
+        # Gérer la colonne 'Aime_pas_princip' : la convertir en string et remplacer NaN par vide
+        self.df_recettes[COLONNE_AIME_PAS_PRINCIP] = self.df_recettes[COLONNE_AIME_PAS_PRINCIP].astype(str).fillna('')
+        self.df_recettes['Transportable'] = self.df_recettes['Transportable'].astype(str).fillna('')
 
         # Menus Historique
         if not self.df_menus_historique.empty:
@@ -1073,29 +1005,23 @@ class MenuGenerator:
             self.df_menus_historique['Date'] > date_limite
         ][COLONNE_NOM].unique()
 
-        # Filtrer en utilisant la colonne COLONNE_NOM (Nom du plat)
         recettes_filtrees = recettes_potentielles[
             ~recettes_potentielles[COLONNE_NOM].isin(recettes_recentes)
-        ].copy() # Utiliser .copy() pour éviter SettingWithCopyWarning
+        ].copy()
         return recettes_filtrees
 
     def _filtrer_recettes_preference(self, recettes, preferences_a_exclure):
         if not preferences_a_exclure:
             return recettes
 
-        # Assurez-vous que la colonne existe
         if COLONNE_AIME_PAS_PRINCIP not in recettes.columns:
             logger.warning(f"La colonne '{COLONNE_AIME_PAS_PRINCIP}' est manquante dans les recettes. Le filtre de préférence ne sera pas appliqué.")
             return recettes
 
-        # Convertir les préférences en une liste de chaînes à rechercher
         preferences_set = set(p.strip().lower() for p in preferences_a_exclure if p and p.strip())
         if not preferences_set:
             return recettes
 
-        # Filtrer les recettes qui contiennent l'une des préférences à exclure
-        # Convertir les valeurs de la colonne en minuscules pour la comparaison
-        # Gérer les NaN en les convertissant en chaînes vides
         recettes_filtrees = recettes[
             ~recettes[COLONNE_AIME_PAS_PRINCIP].astype(str).str.lower().apply(
                 lambda x: any(pref in x for pref in preferences_set)
@@ -1111,15 +1037,12 @@ class MenuGenerator:
         types_autorises = type_plat_map.get(type_repas)
         if not types_autorises:
             logger.warning(f"Type de repas '{type_repas}' non reconnu pour le filtrage par type de plat.")
-            return recettes.copy() # Retourne une copie si aucun filtre n'est appliqué
+            return recettes.copy()
 
-        # Assurez-vous que la colonne 'Type_plat' est du bon type et existe
         if 'Type_plat' not in recettes.columns:
             logger.warning("La colonne 'Type_plat' est manquante dans les recettes. Le filtre par type de plat ne sera pas appliqué.")
             return recettes.copy()
 
-        # Filtrer les recettes dont le 'Type_plat' contient au moins un des types autorisés
-        # Convertir la colonne en chaîne et gérer les NaN
         recettes_filtrees = recettes[
             recettes['Type_plat'].astype(str).apply(
                 lambda x: any(tp in x for tp in types_autorises)
@@ -1135,39 +1058,33 @@ class MenuGenerator:
             temps_total = recette[COLONNE_TEMPS_TOTAL]
             calories = recette['Calories']
             proteines = recette['Proteines']
-            # Convertir Aime_pas_princip en liste de chaînes minuscules
             aime_pas = [s.strip().lower() for s in str(recette[COLONNE_AIME_PAS_PRINCIP]).split(',') if s.strip()]
+            transportable = recette['Transportable'] == "Oui"
 
             score_dispo, pourcentage_dispo, ingredients_manquants = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id, nb_personnes)
 
-            # --- Calcul du score de préférence ---
             score_preference = 1.0
             for pref in preferences_a_exclure:
                 if pref.lower() in aime_pas:
-                    score_preference = 0.0 # Pénalité maximale si contient une préférence à exclure
+                    score_preference = 0.0
                     break
 
-            # --- Calcul du score de temps ---
             score_temps = 1.0
             if temps_total > TEMPS_MAX_RAPIDE:
-                score_temps = 0.5 # Pénalité pour les recettes trop longues
+                score_temps = 0.5
             elif temps_total > TEMPS_MAX_EXPRESS:
-                score_temps = 0.8 # Pénalité modérée
+                score_temps = 0.8
 
-            # --- Calcul du score nutritionnel ---
             score_nutri = 1.0
-            # Exemple: bonus si les calories sont proches d'un idéal, ou si protéines sont élevées
             if REPAS_EQUILIBRE > 0:
                 deviation_calories = abs(calories - REPAS_EQUILIBRE) / REPAS_EQUILIBRE
-                score_nutri *= (1 - min(deviation_calories, 0.5)) # Max 50% de pénalité
+                score_nutri *= (1 - min(deviation_calories, 0.5))
 
-            # Pondération des scores (ajustez ces poids selon l'importance)
             poids_dispo = 0.4
             poids_preference = 0.2
             poids_temps = 0.2
             poids_nutri = 0.2
 
-            # Score final agrégé
             score_final = (score_dispo * poids_dispo +
                            score_preference * poids_preference +
                            score_temps * poids_temps +
@@ -1181,7 +1098,8 @@ class MenuGenerator:
                 'ingredients_manquants': ingredients_manquants,
                 'score_preference': score_preference,
                 'score_temps': score_temps,
-                'score_nutri': score_nutri
+                'score_nutri': score_nutri,
+                'transportable': transportable
             })
         return evaluations
 
@@ -1192,31 +1110,31 @@ class MenuGenerator:
         for index, jour in df_planning_sort.iterrows():
             date_repas_actuelle = jour['Date']
             nb_personnes = jour['Participant(s)']
-            type_repas = jour['Type de repas'] # "Déjeuner" ou "Dîner"
+            type_repas = jour['Type de repas']
 
             logger.info(f"Génération du menu pour le {date_repas_actuelle.strftime('%d/%m/%Y')} - {type_repas} ({nb_personnes} pers.)")
 
-            recettes_candidates = self.df_recettes.copy() # Partir de toutes les recettes
+            recettes_candidates = self.df_recettes.copy()
 
-            # 1. Filtrer les recettes récemment mangées
             recettes_candidates = self._filtrer_recettes_recemment_mangees(recettes_candidates, date_repas_actuelle)
             if recettes_candidates.empty:
                 logger.warning(f"Aucune recette disponible après le filtre anti-répétition pour {date_repas_actuelle}.")
+                # Ajout d'un plat par défaut si aucune recette n'est trouvée
+                menu_genere.append(self._ajouter_plat_par_defaut(date_repas_actuelle, type_repas, nb_personnes, "Anti-répétition trop stricte"))
                 continue
 
-            # 2. Filtrer par type de plat (Déjeuner/Dîner)
             recettes_candidates = self._filtrer_recettes_par_type(recettes_candidates, type_repas)
             if recettes_candidates.empty:
                 logger.warning(f"Aucune recette disponible après le filtre par type de plat pour {date_repas_actuelle} ({type_repas}).")
+                menu_genere.append(self._ajouter_plat_par_defaut(date_repas_actuelle, type_repas, nb_personnes, f"Pas de plat de type {type_repas}"))
                 continue
 
-            # 3. Évaluer les recettes candidates restantes
             evaluations = self._evaluer_recettes(recettes_candidates, nb_personnes, preferences_a_exclure)
             if not evaluations:
                 logger.warning(f"Aucune recette n'a pu être évaluée pour {date_repas_actuelle}.")
+                menu_genere.append(self._ajouter_plat_par_defaut(date_repas_actuelle, type_repas, nb_personnes, "Aucune recette évaluée"))
                 continue
 
-            # Trier les recettes par score final (descendant)
             evaluations_triees = sorted(evaluations, key=lambda x: x['score_final'], reverse=True)
 
             recette_choisie = None
@@ -1229,11 +1147,8 @@ class MenuGenerator:
 
                 logger.info(f"  Recette candidate: {recette[COLONNE_NOM]} (Score: {score_final:.2f}, Dispo: {pourcentage_dispo:.1f}%)")
 
-                # Critère de sélection : score de disponibilité doit être > 0 (au moins 1 ingrédient dispo)
-                # et le score final doit être suffisamment bon (ex: > 0.5)
-                if score_dispo > 0 and score_final > 0.4: # Ajustez ce seuil si nécessaire
+                if score_dispo > 0 and score_final > 0.4:
                     recette_choisie = recette
-                    # Ajuster le stock simulé avec la recette choisie
                     self.recette_manager.ajuster_stock_simule(str(recette_choisie[COLONNE_ID_RECETTE]), nb_personnes)
                     logger.info(f"✅ Recette sélectionnée : {recette_choisie[COLONNE_NOM]} (Score final: {score_final:.2f})")
                     break
@@ -1243,19 +1158,7 @@ class MenuGenerator:
 
             if recette_choisie is None:
                 logger.warning(f"Impossible de trouver une recette adaptée pour {date_repas_actuelle.strftime('%d/%m/%Y')} - {type_repas}. Ajout d'un repas 'Plat à définir'.")
-                menu_genere.append({
-                    'Date': date_repas_actuelle.strftime('%d/%m/%Y'),
-                    'Jour': date_repas_actuelle.strftime('%A'),
-                    'Type de repas': type_repas,
-                    'Participant(s)': nb_personnes,
-                    'Nom': 'Plat à définir',
-                    'ID_Recette': 'N/A',
-                    'Temps_total': 0,
-                    'Calories': 0,
-                    'Proteines': 0,
-                    'Aime_pas_princip': '',
-                    'Transportable': ''
-                })
+                menu_genere.append(self._ajouter_plat_par_defaut(date_repas_actuelle, type_repas, nb_personnes, "Aucune recette satisfaisante"))
             else:
                 menu_genere.append({
                     'Date': date_repas_actuelle.strftime('%d/%m/%Y'),
@@ -1263,7 +1166,7 @@ class MenuGenerator:
                     'Type de repas': type_repas,
                     'Participant(s)': nb_personnes,
                     'Nom': recette_choisie[COLONNE_NOM],
-                    'ID_Recette': recette_choisie[COLONNE_ID_RECETTE],
+                    'ID_Recette': recette_choisie[COLonne_ID_RECETTE],
                     'Temps_total': recette_choisie[COLONNE_TEMPS_TOTAL],
                     'Calories': recette_choisie['Calories'],
                     'Proteines': recette_choisie['Proteines'],
@@ -1272,20 +1175,33 @@ class MenuGenerator:
                 })
         return pd.DataFrame(menu_genere)
 
+    def _ajouter_plat_par_defaut(self, date_repas, type_repas, nb_personnes, raison=""):
+        return {
+            'Date': date_repas.strftime('%d/%m/%Y'),
+            'Jour': date_repas.strftime('%A'),
+            'Type de repas': type_repas,
+            'Participant(s)': nb_personnes,
+            'Nom': f'Plat à définir ({raison})' if raison else 'Plat à définir',
+            'ID_Recette': 'N/A',
+            'Temps_total': 0,
+            'Calories': 0,
+            'Proteines': 0,
+            'Aime_pas_princip': '',
+            'Transportable': ''
+        }
+
 # --- Exécution principale ---
 if __name__ == "__main__":
     logger.info("Démarrage du script de génération de menus.")
 
-    # Chargement des données (simulons les chargements ici)
     try:
-        # Assurez-vous que df_planning est déjà chargé depuis le bloc initial
-        # df_planning = pd.read_csv(FICHIER_PLANNING, sep=None, engine='python') # Cette ligne est déjà gérée en début de script
+        # df_planning est déjà chargé au début du script
         df_recettes = pd.read_csv(FICHIER_RECETTES, encoding='utf-8')
         df_menus = pd.read_csv(FICHIER_MENUS, encoding='utf-8')
         df_ingredients = pd.read_csv(FICHIER_INGREDIENTS, encoding='utf-8')
         df_ingredients_recettes = pd.read_csv(FICHIER_INGREDIENTS_RECETTES, encoding='utf-8')
 
-        logger.info(f"Fichiers chargés : {FICHIER_PLANNING}, {FICHIER_RECETTES}, {FICHIER_MENUS}, {FICHIER_INGREDIENTS}, {FICHIER_INGREDIENTS_RECETTES}")
+        logger.info(f"Fichiers chargés : {planning_file_name}, {FICHIER_RECETTES}, {FICHIER_MENUS}, {FICHIER_INGREDIENTS}, {FICHIER_INGREDIENTS_RECETTES}")
         logger.info(f"Planning head:\n{df_planning.head()}")
         logger.info(f"Recettes head:\n{df_recettes.head()}")
         logger.info(f"Menus historique head:\n{df_menus.head()}")
@@ -1293,8 +1209,8 @@ if __name__ == "__main__":
         logger.info(f"Ingrédients recettes head:\n{df_ingredients_recettes.head()}")
 
     except FileNotFoundError as e:
-        logger.critical(f"Erreur: Fichier de données manquant : {e}. Assurez-vous que tous les CSV sont présents.")
-        exit() # Arrête l'exécution si un fichier manque
+        logger.critical(f"Erreur: Fichier de données manquant : {e}. Assurez-vous que tous les CSV sont présents et nommés correctement.")
+        exit()
     except pd.errors.EmptyDataError as e:
         logger.critical(f"Erreur: Le fichier est vide : {e}. Veuillez vérifier son contenu.")
         exit()
@@ -1302,38 +1218,26 @@ if __name__ == "__main__":
         logger.critical(f"Erreur lors du chargement des fichiers : {e}")
         exit()
 
-    # Initialisation du RecetteManager (pour la logique d'ingrédients/stock)
     recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
 
-    # Initialisation du Générateur de Menus
     menu_generator = MenuGenerator(df_planning, df_recettes, df_menus, recette_manager)
 
-    # Définir les préférences à exclure (par exemple, des ingrédients ou types de plats que vous n'aimez pas)
-    # C'est ici que vous pourriez ajouter une interface utilisateur pour collecter ces préférences
-    preferences_a_exclure = ["lentilles", "chèvre"] # Exemple
+    preferences_a_exclure = ["lentilles", "chèvre"]
 
-    # Génération du menu
     df_menu_genere = menu_generator.generer_menu(preferences_a_exclure)
 
-    # Post-traitement et sauvegarde du menu généré
     if not df_menu_genere.empty:
-        # S'assurer que la colonne 'Nom' est de type string et convertir en titre
         df_menu_genere[COLONNE_NOM] = df_menu_genere[COLONNE_NOM].astype(str).apply(
             lambda x: unicodedata.normalize('NFKC', x).title()
         )
-        # Supprimer 'N/A' si Nom Menu est 'Plat à définir'
-        df_menu_genere.loc[df_menu_genere['Nom'] == 'Plat À Définir', 'ID_Recette'] = ''
+        df_menu_genere.loc[df_menu_genere['Nom'].str.startswith('Plat À Définir'), 'ID_Recette'] = ''
 
-        # Ajout du récapitulatif des ingrédients
         logger.info("Génération du récapitulatif des ingrédients et de la liste de courses.")
         liste_courses, ingredients_par_repas = recette_manager.generer_liste_courses(df_menu_genere, df_planning)
 
-        # Générer le contenu du fichier texte de récapitulatif
         contenu_fichier_recap_txt = []
 
-        # Récapitulatif par repas (déjà trié par date dans le planning)
         contenu_fichier_recap_txt.append("=== Récapitulatif des ingrédients par repas ===\n")
-        # Trier les dates pour s'assurer de l'ordre chronologique
         dates_triees = sorted(ingredients_par_repas.keys(), key=lambda x: datetime.strptime(x, '%d/%m/%Y'))
 
         for date_repas in dates_triees:
@@ -1346,10 +1250,8 @@ if __name__ == "__main__":
                         f"(Stock: {ing_detail['qte_en_stock']:.2f}, A acheter: {ing_detail['qte_achetee']:.2f})\n"
                     )
 
-        # Liste de courses finale
         contenu_fichier_recap_txt.append("\n=== LISTE DE COURSES FINALE ===\n")
         if liste_courses:
-            # Tri par type de stock, puis par nom d'ingrédient
             ingredients_trier = sorted(
                 liste_courses.items(),
                 key=lambda item: (item[1]["type_stock"], item[0].lower())
@@ -1363,11 +1265,9 @@ if __name__ == "__main__":
         else:
             contenu_fichier_recap_txt.append("Aucun ingrédient à acheter pour ce menu.\n")
 
-        # Exporter les listes anti-gaspi
         contenu_fichier_recap_txt.append("\n=== INGRÉDIENTS À CONSOMMER EN PRIORITÉ (Anti-Gaspi) ===\n")
         if recette_manager.anti_gaspi_ingredients:
             for ing_id, ing_nom in recette_manager.anti_gaspi_ingredients.items():
-                # Récupérer la quantité en stock pour l'affichage
                 ing_stock_df = recette_manager.stock_simule[recette_manager.stock_simule[COLONNE_ID_INGREDIENT].astype(str) == ing_id]
                 if not ing_stock_df.empty:
                     qte_stock_anti_gaspi = ing_stock_df["Qte reste"].iloc[0]
@@ -1378,28 +1278,17 @@ if __name__ == "__main__":
         else:
             contenu_fichier_recap_txt.append("Aucun ingrédient en stock élevé à consommer en priorité.\n")
 
-
-        # Affichage direct du contenu pour Colab
-        display(HTML("<h2>Fichier Généré : Menu_genere.csv</h2>"))
-        display(df_menu_genere)
-
-        display(HTML("<h2>Fichier Généré : récapitulatif_ingredients.txt</h2>"))
-        display(HTML("<pre style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>{}</pre>".format("".join(contenu_fichier_recap_txt))))
-
-
         # Sauvegarde des fichiers
-        # Nettoyer les caractères potentiellement problématiques dans les noms de colonnes avant exportation
         df_menu_genere.columns = df_menu_genere.columns.str.replace("[^a-zA-Z0-9_]", "", regex=True)
 
         if not df_menu_genere.empty:
-            # Log du nombre de lignes avant tout traitement
             logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
-            # Formater les dates pour Notion au format YYYY-MM-DD HH:MM
             if 'Date' in df_menu_genere.columns:
-                df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
-            # Exporter uniquement les colonnes demandées
-            colonnes_export = ["Date", "Participant(s)", "Nom"]
-            df_menu_genere.to_csv(FICHIER_SORTIE_MENU_CSV, columns=colonnes_export, index=False, encoding="utf-8-sig")
+                df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+            colonnes_export = ["Date", "Participants", "Nom"]
+            # Vérifier si les colonnes existent avant d'exporter
+            colonnes_export_existantes = [col for col in colonnes_export if col in df_menu_genere.columns]
+            df_menu_genere.to_csv(FICHIER_SORTIE_MENU_CSV, columns=colonnes_export_existantes, index=False, encoding="utf-8-sig")
             logger.info(f"Fichier CSV enregistré sous '{FICHIER_SORTIE_MENU_CSV}'")
         else:
             logger.warning(f"DataFrame menu vide. '{FICHIER_SORTIE_MENU_CSV}' non créé.")
@@ -1409,10 +1298,14 @@ if __name__ == "__main__":
                 f_txt.writelines(contenu_fichier_recap_txt)
             logger.info(f"Récapitulatif des ingrédients enregistré dans '{FICHIER_SORTIE_LISTES_TXT}'")
         except Exception as e:
-            logger.error(f"Erreur écriture du récapitulatif des ingrédients : {e}")
+            logger.error(f"Erreur écriture récapitulatif des ingrédients: {e}")
+
+        print("\n=== Génération du menu terminée ===\n")
+        print(f"Les fichiers '{FICHIER_SORTIE_MENU_CSV}' et '{FICHIER_SORTIE_LISTES_TXT}' ont été créés.")
+        print("\nContenu de Menu_genere.csv (premières lignes) :")
+        print(df_menu_genere.head())
+        print("\nContenu de recapitulatif_ingredients.txt (extrait) :")
+        print("".join(contenu_fichier_recap_txt[:20])) # Afficher les 20 premières lignes
 
     else:
-        logger.warning("Aucun menu n'a pu être généré.")
         print("Aucun menu n'a pu être généré. Veuillez vérifier vos données de planning et de recettes.")
-
-
