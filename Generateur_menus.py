@@ -617,6 +617,7 @@ class MenuGenerator:
                     # to the pool of 'original transportable meals'.
                     # if date_repas_dt.weekday() >= 5:
                     #      plats_transportables_semaine[date_repas_dt] = recette_choisie_id
+
             else: # Repas standard
                 recette_choisie_id, ingredients_manquants_pour_recette_choisie = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
