@@ -553,7 +553,7 @@ def main():
     st.title("🍽️ Générateur de Menus Automatisé")
     st.markdown("""
         Chargez vos fichiers CSV pour générer un planning de repas et une liste de courses.
-        Assurez-vous que les fichiers CSV sont encodés en UTF-8. Le fichier 'Recettes.csv' doit utiliser la virgule (`,`) comme délimiteur, tandis que les autres fichiers doivent utiliser le point-virgule (`;`).
+        Assurez-vous que les fichiers CSV sont encodés en UTF-8. Le fichier 'Recettes.csv' et 'Ingredients.csv' doivent utiliser la virgule (`,`) comme délimiteur, tandis que les autres fichiers doivent utiliser le point-virgule (`;`).
     """)
 
     st.header("1. Chargement des fichiers de données")
@@ -578,8 +578,8 @@ def main():
     for name, uploaded_file in files_to_load.items():
         if uploaded_file is not None:
             try:
-                # Logique pour déterminer le séparateur
-                separator = ',' if name == "Recettes" else ';'
+                # Logique pour déterminer le séparateur : virgule pour Recettes et Ingredients, point-virgule pour les autres
+                separator = ',' if name in ["Recettes", "Ingredients"] else ';'
                 # Tente de lire avec utf-8, puis latin1 si utf-8 échoue
                 df = pd.read_csv(uploaded_file, sep=separator, encoding='utf-8')
                 dataframes[name] = df
@@ -587,15 +587,15 @@ def main():
             except UnicodeDecodeError:
                 try:
                     uploaded_file.seek(0) # Revenir au début du fichier
-                    separator = ',' if name == "Recettes" else ';'
+                    separator = ',' if name in ["Recettes", "Ingredients"] else ';'
                     df = pd.read_csv(uploaded_file, sep=separator, encoding='latin1')
                     dataframes[name] = df
                     st.warning(f"'{name}.csv' chargé avec succès en utilisant l'encodage 'latin1'.")
                 except Exception as e:
-                    st.error(f"Erreur de lecture de '{name}.csv': {e}. Assurez-vous que le fichier est un CSV valide et utilise le bon délimiteur (virgule pour Recettes.csv, point-virgule pour les autres).")
+                    st.error(f"Erreur de lecture de '{name}.csv': {e}. Assurez-vous que le fichier est un CSV valide et utilise le bon délimiteur (virgule pour Recettes.csv et Ingredients.csv, point-virgule pour les autres).")
                     all_files_uploaded = False
             except Exception as e:
-                st.error(f"Erreur de lecture de '{name}.csv': {e}. Assurez-vous que le fichier est un CSV valide et utilise le bon délimiteur (virgule pour Recettes.csv, point-virgule pour les autres).")
+                st.error(f"Erreur de lecture de '{name}.csv': {e}. Assurez-vous que le fichier est un CSV valide et utilise le bon délimiteur (virgule pour Recettes.csv et Ingredients.csv, point-virgule pour les autres).")
                 all_files_uploaded = False
         else:
             all_files_uploaded = False
