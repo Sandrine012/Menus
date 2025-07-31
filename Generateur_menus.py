@@ -335,7 +335,7 @@ class MenuGenerator:
     def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
         return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
 
-    def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req):
+    def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, apply_anti_repetition=True):
         candidates = []
         anti_gaspi_candidates = []
         recettes_scores_dispo = {}
@@ -353,7 +353,9 @@ class MenuGenerator:
 
             if recette_id_str_cand in used_recipes_in_current_gen: continue
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes): continue
-            if self.est_recente(recette_id_str_cand, date_repas): continue
+            
+            # Application de l'anti-répétition conditionnelle
+            if apply_anti_repetition and self.est_recente(recette_id_str_cand, date_repas): continue
 
             if nutrition_req == "equilibré":
                 try:
@@ -384,84 +386,77 @@ class MenuGenerator:
         return candidates_triees[:10], recettes_ingredients_manquants
 
     def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
+        # Première tentative avec toutes les règles (incluant l'anti-répétition stricte)
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_current_gen_set,
-            transportable_req_str, temps_req_str, nutrition_req_str
+            transportable_req_str, temps_req_str, nutrition_req_str, apply_anti_repetition=True
         )
-        if not recettes_candidates_initiales: return None, {}
-
-        recettes_historiques_semaine_set = self.recettes_meme_semaine_annees_precedentes(date_repas)
-        scores_candidats_dispo = {
-            r_id: self.recette_manager.evaluer_disponibilite_et_manquants(r_id, participants_count_int)[0]
-            for r_id in recettes_candidates_initiales
-        }
-        preferred_candidates_list = [r_id for r_id in recettes_candidates_initiales if r_id in recettes_historiques_semaine_set]
-
-        mots_cles_exclus_set = set()
-        if menu_recent_noms_list:
-            for nom_plat_recent in menu_recent_noms_list:
-                if isinstance(nom_plat_recent, str) and nom_plat_recent.strip():
-                    try: mots_cles_exclus_set.add(nom_plat_recent.lower().split()[0])
-                    except IndexError: pass
-
-        def get_first_word_local(recette_id_str_func):
-            nom = self.recette_manager.obtenir_nom(recette_id_str_func)
-            return nom.lower().split()[0] if nom and nom.strip() and "Recette_ID_" not in nom else ""
 
         recette_choisie_final = None
-        if preferred_candidates_list:
-            preferred_valides_motcle = [r_id for r_id in preferred_candidates_list if get_first_word_local(r_id) not in mots_cles_exclus_set]
-            if preferred_valides_motcle:
-                recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-            else:
-                recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+        remarques_repas = "Plat généré"
 
+        if recettes_candidates_initiales:
+            recettes_historiques_semaine_set = self.recettes_meme_semaine_annees_precedentes(date_repas)
+            scores_candidats_dispo = {
+                r_id: self.recette_manager.evaluer_disponibilite_et_manquants(r_id, participants_count_int)[0]
+                for r_id in recettes_candidates_initiales
+            }
+            preferred_candidates_list = [r_id for r_id in recettes_candidates_initiales if r_id in recettes_historiques_semaine_set]
+
+            mots_cles_exclus_set = set()
+            if menu_recent_noms_list:
+                for nom_plat_recent in menu_recent_noms_list:
+                    if isinstance(nom_plat_recent, str) and nom_plat_recent.strip():
+                        try: mots_cles_exclus_set.add(nom_plat_recent.lower().split()[0])
+                        except IndexError: pass
+
+            def get_first_word_local(recette_id_str_func):
+                nom = self.recette_manager.obtenir_nom(recette_id_str_func)
+                return nom.lower().split()[0] if nom and nom.strip() and "Recette_ID_" not in nom else ""
+
+            if preferred_candidates_list:
+                preferred_valides_motcle = [r_id for r_id in preferred_candidates_list if get_first_word_local(r_id) not in mots_cles_exclus_set]
+                if preferred_valides_motcle:
+                    recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                else:
+                    recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+
+            if not recette_choisie_final: # Si pas trouvé parmi les préférées ou avec mots-clés
+                candidates_valides_motcle = [r_id for r_id in recettes_candidates_initiales if get_first_word_local(r_id) not in mots_cles_exclus_set]
+                if candidates_valides_motcle:
+                    recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                elif recettes_candidates_initiales:
+                    recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+
+        # Mécanisme de repli : Si aucune recette n'a été trouvée avec les règles strictes
         if not recette_choisie_final:
-            candidates_valides_motcle = [r_id for r_id in recettes_candidates_initiales if get_first_word_local(r_id) not in mots_cles_exclus_set]
-            if candidates_valides_motcle:
-                recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-            elif recettes_candidates_initiales:
-                recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+            logger.info(f"Aucune recette trouvée avec les contraintes et l'anti-répétition pour {date_repas.strftime('%d/%m/%Y %H:%M')}. Tentative sans anti-répétition stricte (NB_JOURS_ANTI_REPETITION).")
+            recettes_candidates_relaxed, recettes_manquants_dict_relaxed = self.generer_recettes_candidates(
+                date_repas, participants_str_codes, used_recipes_current_gen_set,
+                transportable_req_str, temps_req_str, nutrition_req_str, apply_anti_repetition=False # Deuxième passage : SANS anti-répétition sur l'historique récent
+            )
 
-        if recette_choisie_final:
-            return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
-        return None, {}
+            if recettes_candidates_relaxed:
+                scores_candidats_dispo_relaxed = {
+                    r_id: self.recette_manager.evaluer_disponibilite_et_manquants(r_id, participants_count_int)[0]
+                    for r_id in recettes_candidates_relaxed
+                }
+                # Prioriser les recettes historiques de la même semaine si possible, même en mode relaxé
+                preferred_candidates_relaxed = [r_id for r_id in recettes_candidates_relaxed if r_id in self.recettes_meme_semaine_annees_precedentes(date_repas)]
 
-    def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
-        if recette_id_str is not None:
-            nom_recette = self.recette_manager.obtenir_nom(recette_id_str)
-            adaptee = self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
-            temps_prep = self.recette_manager.obtenir_temps_preparation(recette_id_str)
-            logger.debug(f"Décision rec {recette_id_str} ({nom_recette}): Adaptée={adaptee}, Temps={temps_prep} min")
-        else:
-            logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
+                if preferred_candidates_relaxed:
+                    recette_choisie_final = sorted(preferred_candidates_relaxed, key=lambda r_id: scores_candidats_dispo_relaxed.get(r_id, -1), reverse=True)[0]
+                else: # Sinon, prendre la meilleure tout court
+                    recette_choisie_final = sorted(recettes_candidates_relaxed, key=lambda r_id: scores_candidats_dispo_relaxed.get(r_id, -1), reverse=True)[0]
 
-    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
-        candidats_restes_ids = []
-        sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
+                recettes_manquants_dict = recettes_manquants_dict_relaxed
+                remarques_repas = "Plat généré (règles d'anti-répétition assouplies)"
+                logger.info(f"Recette trouvée après assouplissement: {self.recette_manager.obtenir_nom(recette_choisie_final)}")
+            else:
+                remarques_repas = "Aucune recette n'a pu être sélectionnée, même après assouplissement."
+                logger.warning(f"Aucune recette trouvée du tout pour {date_repas.strftime('%d/%m/%Y %H:%M')}")
 
-        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
-            if 0 < jours_ecoules <= 2 and plat_id_orig_str not in repas_b_utilises_ids_list:
-                nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
-                if nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste:
-                    premier_mot_reste = nom_plat_reste.lower().split()[0]
-                    mots_cles_recents_set = set()
-                    if menu_recent_noms_list:
-                        for nom_plat_r in menu_recent_noms_list:
-                            if isinstance(nom_plat_r, str) and nom_plat_r.strip():
-                                try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
-                                except IndexError: pass
-                    if premier_mot_reste not in mots_cles_recents_set:
-                        candidats_restes_ids.append(plat_id_orig_str)
-
-        if candidats_restes_ids:
-            plat_id_choisi_str = candidats_restes_ids[0]
-            nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
-            repas_b_utilises_ids_list.append(plat_id_choisi_str)
-            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
-
-        return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
+        return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {}), remarques_repas
 
     def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
         info_stock_str = ""
@@ -513,7 +508,7 @@ class MenuGenerator:
                     if date_repas_dt.weekday() >= 5: # Samedi ou Dimanche
                          plats_transportables_semaine[date_repas_dt] = recette_choisie_id
             else:
-                recette_choisie_id, ingredients_manquants_pour_recette_choisie = self._traiter_menu_standard(
+                recette_choisie_id, ingredients_manquants_pour_recette_choisie, remarques_repas = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count,
                     used_recipes_current_generation_set, menu_recent_noms,
                     transportable_req, temps_req, nutrition_req
@@ -522,7 +517,6 @@ class MenuGenerator:
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
                     used_recipes_current_generation_set.add(recette_choisie_id)
-                    remarques_repas = "Plat généré"
                     ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
                     if date_repas_dt.weekday() >= 5 and self.recette_manager.est_transportable(recette_choisie_id): # Samedi ou Dimanche
@@ -537,10 +531,10 @@ class MenuGenerator:
 
                 else:
                     nom_plat_final = "Pas de recette trouvée"
-                    remarques_repas = "Aucune recette n'a pu être sélectionnée pour ce créneau."
+                    # remarques_repas est déjà défini par _traiter_menu_standard dans ce cas.
 
             # Mettre à jour les noms des plats récents pour l'anti-répétition des premiers mots
-            if nom_plat_final and "Erreur" not in nom_plat_final and "Pas de reste" not in nom_plat_final:
+            if nom_plat_final and "Erreur" not in nom_plat_final and "Pas de reste" not in nom_plat_final and "Pas de recette trouvée" not in nom_plat_final:
                 if len(menu_recent_noms) >= 3:
                     menu_recent_noms.pop(0) # Garder les 3 derniers
                 menu_recent_noms.append(nom_plat_final)
