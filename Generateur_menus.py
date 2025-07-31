@@ -472,6 +472,14 @@ class MenuGenerator:
             "Remarques spécifiques": remarques_finales,
             "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
         })
+    
+    def _log_decision_recette(self, recette_id, date_repas, participants):
+        """Log the decision made for a specific recipe."""
+        if recette_id:
+            nom_recette = self.recette_manager.obtenir_nom(recette_id)
+            logger.info(f"DECISION pour {date_repas.strftime('%d/%m/%Y %H:%M')} ({participants}): Recette choisie: {nom_recette} (ID: {recette_id})")
+        else:
+            logger.info(f"DECISION pour {date_repas.strftime('%d/%m/%Y %H:%M')} ({participants}): Aucune recette trouvée.")
 
     def generer_menu(self):
         resultats_df_list = []
