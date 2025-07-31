@@ -1433,4 +1433,4 @@ if __name__ == "__main__":
         logger.warning("Aucun menu n'a pu être généré.")
         print("Aucun menu n'a pu être généré. Veuillez vérifier vos données de planning et de recettes.")
 
-```
+
