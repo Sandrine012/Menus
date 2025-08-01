@@ -761,7 +761,7 @@ if "Proteines" in df.columns:
 
 
 dataframes[file_name.replace(".csv", "")] = df
-                st.sidebar.success(f"{file_name} chargé avec succès.")
+st.sidebar.success(f"{file_name} chargé avec succès.")
             except Exception as e:
                 st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
                 all_files_uploaded = False
