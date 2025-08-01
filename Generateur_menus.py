@@ -746,6 +746,7 @@ if missing:
 # Vous pourriez envisager de supprimer le premier bloc redondant pour plus de clarté.
 
 for file_name in file_names:
+for file_name in file_names:
     file = file_dict[file_name]
     try:
         if file_name == "Planning.csv":
@@ -758,23 +759,16 @@ for file_name in file_names:
                 dayfirst=True
             )
         else:
-            # CORRECTION ICI: Ajout de sep="," pour les fichiers non-Planning
             df = pd.read_csv(file, encoding="utf-8", sep=",")
 
         # Normalisations communes
-        if "Temps_total" in df.columns:
-            df["Temps_total"] = (
-                pd.to_numeric(df["Temps_total"], errors="coerce")
-                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
-                  .astype(int)
-            )
-        for col in ["Calories", "Proteines"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        # ... (votre code de normalisation) ...
 
         dataframes[file_name.replace(".csv", "")] = df
         st.sidebar.success(f"{file_name} chargé.")
     except Exception as e:
+        # AJOUTEZ CETTE LIGNE POUR AFFICHER L'ERREUR DANS LA CONSOLE
+        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}")
         st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
         st.stop()
 
