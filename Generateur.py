@@ -1,104 +1,81 @@
 import streamlit as st
 import pandas as pd
 import io
-from datetime import datetime
 
 # --------------------------------------------------
-# 1.  Fonctions utilitaires d’export 4-en-1
+# 1.  Conversion DataFrame ➜ bytes pour Streamlit
 # --------------------------------------------------
-def build_csv_bytes(df: pd.DataFrame) -> bytes:
-    """Convertit un DataFrame en bytes UTF-8-SIG pour download_button."""
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False, encoding="utf-8-sig")
-    return buffer.getvalue().encode("utf-8-sig")
-
-
-def pack_four_files(df_menus, df_ingredients, df_ingredients_recettes, df_recettes):
+def _csv_bytes(df: pd.DataFrame) -> bytes:
     """
-    Retourne un dict {nom_fichier: bytes} prêt pour zip ou multi-download.
-    Les noms correspondent strictement aux fichiers fournis par l’utilisateur.
+    Convertit un DataFrame en UTF-8 avec BOM (utf-8-sig) afin
+    d’être lisible directement par Excel et Google Sheets.
     """
-    fichiers = {
-        "Menus_generes.csv":          build_csv_bytes(df_menus),
-        "Liste_ingredients.txt":      build_courses_txt(df_ingredients, df_ingredients_recettes).encode("utf-8"),
-        "Recettes.csv":               build_csv_bytes(df_recettes),
-        "Ingredients_recettes.csv":   build_csv_bytes(df_ingredients_recettes),
-    }
-    return fichiers
-
-
-def build_courses_txt(df_ing_stock, df_ing_recette) -> str:
-    """
-    Recalcule rapidement la liste de courses (logique identique à votre code
-    d’origine) et renvoie une chaîne prête à être écrite dans le .txt.
-    """
-    # agrégation quantités
-    df_tmp = (df_ing_recette
-              .groupby(['Ingrédient ok'])['Qté/pers_s']
-              .sum()
-              .reset_index()
-              .merge(df_ing_stock[['Nom', 'Qte reste']], left_on='Ingrédient ok',
-                     right_on='Nom', how='left'))
-    df_tmp['Qte reste'] = pd.to_numeric(df_tmp['Qte reste'], errors='coerce').fillna(0)
-    df_tmp['A acheter'] = (df_tmp['Qté/pers_s'] - df_tmp['Qte reste']).clip(lower=0)
-
-    lignes = ["Liste de courses (éléments à acheter) :\n"]
-    for _, row in df_tmp[df_tmp['A acheter'] > 0].iterrows():
-        lignes.append(f"- {row['A acheter']:.2f}  de  {row['Ingrédient ok']}\n")
-    return "".join(lignes)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8-sig")
+    return buf.getvalue().encode("utf-8-sig")
 
 
 # --------------------------------------------------
-# 2.  Intégration dans l’appli Streamlit existante
+# 2.  Bloc Streamlit à insérer dans l’interface
 # --------------------------------------------------
-def zone_telechargements():
-    st.header("📥 Télécharger les 4 fichiers en une seule action")
+def bloc_telechargement() -> None:
+    """Affiche un bouton unique qui prépare 4 liens de téléchargement CSV."""
+    st.header("📥 Export CSV (4 fichiers)")
 
-    # Vérifie que les 4 DataFrame sont bien prêts
-    required_keys = ['df_menus_gen', 'df_ingredients', 'df_ingredients_recettes', 'df_recettes']
-    if not all(k in st.session_state and not st.session_state[k].empty for k in required_keys):
-        st.info("Les données ne sont pas encore prêtes – générez-les d’abord.")
+    # Les quatre DataFrame attendus
+    keys = [
+        "df_menus_gen",
+        "df_ingredients",
+        "df_ingredients_recettes",
+        "df_recettes",
+    ]
+
+    # Garde-fou : attend que les données soient prêtes
+    if not all(
+        k in st.session_state and isinstance(st.session_state[k], pd.DataFrame)
+        and not st.session_state[k].empty
+        for k in keys
+    ):
+        st.info("Les données ne sont pas encore prêtes – génère-les d’abord.")
         return
 
-    # Construction des fichiers
-    fichiers = pack_four_files(
-        st.session_state['df_menus_gen'],
-        st.session_state['df_ingredients'],
-        st.session_state['df_ingredients_recettes'],
-        st.session_state['df_recettes']
-    )
+    # Affiche un seul bouton
+    if st.button("💾 Préparer les 4 fichiers CSV"):
+        fichiers = {
+            "Menus_generes.csv":        _csv_bytes(st.session_state["df_menus_gen"]),
+            "Ingredients.csv":          _csv_bytes(st.session_state["df_ingredients"]),
+            "Ingredients_recettes.csv": _csv_bytes(st.session_state["df_ingredients_recettes"]),
+            "Recettes.csv":             _csv_bytes(st.session_state["df_recettes"]),
+        }
 
-    # Un bouton => quatre téléchargements synchrones
-    if st.button("💾 Télécharger les 4 CSV"):
+        # Quatre liens de téléchargement
         for nom, contenu in fichiers.items():
             st.download_button(
-                label=f"Télécharger {nom}",
+                label=f"Télécharger : {nom}",
                 data=contenu,
                 file_name=nom,
-                mime="text/csv" if nom.endswith(".csv") else "text/plain",
-                key=nom  # clé unique par fichier
+                mime="text/csv",
+                key=nom,          # clé unique par bouton
             )
-        st.success("Téléchargement prêt ! Cliquez sur chaque lien généré ci-dessous.")
+        st.success("Fichiers générés ! Clique sur chaque lien pour les récupérer.")
+
 
 # --------------------------------------------------
-# 3.  Ajout dans votre main()
+# 3.  Exemple d’intégration dans main()
 # --------------------------------------------------
 def main():
-    # … votre code (chargement Notion, traitements, etc.) …
+    # 3-A.  ❱❱  TON PIPELINE EXISTANT  ❰❰
+    # (fetch Notion ➜ transformation ➜ création DataFrame)
+    # Exemple d’enregistrement dans session_state :
+    #
+    # st.session_state["df_recettes"] = df_recettes
+    # st.session_state["df_ingredients"] = df_ingredients
+    # st.session_state["df_ingredients_recettes"] = df_ing_recettes
+    # st.session_state["df_menus_gen"] = df_menus_complet[["Date", "Participant(s)", "Nom"]]
 
-    # Vérifie d’abord que df_menus_complet existe et est un DataFrame
-    if (
-        'df_menus_gen' not in st.session_state
-        and 'df_menus_complet' in locals()        # ou globals() selon votre portée
-        and isinstance(df_menus_complet, pd.DataFrame)
-        and not df_menus_complet.empty
-    ):
-        st.session_state['df_menus_gen'] = df_menus_complet[['Date', 'Participant(s)', 'Nom']]
+    # 3-B.  Bloc export CSV
+    bloc_telechargement()
 
-    zone_telechargements()
-
-
-    # ... fin main ...
 
 if __name__ == "__main__":
     main()
