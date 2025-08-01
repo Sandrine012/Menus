@@ -138,8 +138,9 @@ def extract_recettes() -> pd.DataFrame:
                 break
             time.sleep(RETRY_DELAY_S * retries)
         except APIResponseError as e:
-            st.error(f"Erreur API Notion : {e.message}")
+            st.error(f"Erreur API Notion ({e.code}) : {e}")   # e.code + str(e)
             break
+
 
     # conversion vers DataFrame
     rows = []
