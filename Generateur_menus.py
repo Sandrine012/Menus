@@ -753,7 +753,8 @@ for file_name in file_names:
                 dayfirst=True
             )  # ← cette ) manquait aussi
         else:
-            df = pd.read_csv(file, encoding="utf-8")
+            df = pd.read_csv(file, encoding="utf-8", sep=",") # bon séparateur
+
 
         # Normalisations communes
         if "Temps_total" in df.columns:
