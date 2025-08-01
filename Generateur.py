@@ -42,7 +42,7 @@ try:
     logger.info("Client Notion initialisé.")
 except Exception as e:
     st.error(f"Erreur de configuration ou de connexion à Notion : {e}")
-    st.info("Veuillez vous assurer que les secrets Notion sont correctement configurés dans Streamlit Cloud.")
+    st.info("Veuillez vous assurer que les secrets Notion sont correctement configurés dans Streamlit Cloud ou dans le fichier secrets.toml.")
     st.stop()
 
 # ========== FONCTION D'EXTRACTION DE PROPRIÉTÉS (Basée sur votre code Colab) ==========
@@ -234,11 +234,7 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
         row_data = {}
         page_props_raw = page.get("properties", {})
         for csv_col_name, (notion_prop_name_key, expected_format_key) in mapping.items():
-            # NOTE: Page_ID n'est pas inclus dans le mapping_menus final pour éviter son exportation
-            # Si 'page_id_special' était nécessaire en interne pour d'autres traitements,
-            # il faudrait l'ajouter ici temporairement puis le supprimer avant de retourner le df.
-            # Mais pour l'export CSV strict, on le retire du mapping.
-            if csv_col_name == "Page_ID": # Garder ce bloc si Page_ID doit être traité différemment ou si le mapping_menus était plus large
+            if csv_col_name == "Page_ID": 
                 row_data[csv_col_name] = page.get("id", "")
             else:
                 raw_prop_data = page_props_raw.get(notion_prop_name_key)
@@ -344,91 +340,107 @@ st.info("Assurez-vous que les bases de données Notion sont accessibles et conti
 
 
 st.header("2. Extraction des Données de Notion vers CSV/ZIP")
-st.markdown("Cliquez sur le bouton ci-dessous pour extraire toutes les données de vos bases Notion (Recettes, Ingrédients, Ingrédients_recettes, Menus) et les télécharger dans un fichier ZIP.")
+st.markdown("Cochez les types de données que vous souhaitez extraire de Notion et télécharger :")
 
-if st.button("Extraire et Télécharger Toutes les Données de Notion"):
-    csv_data_dict = {}
-    extraction_successful = True
+with st.form("extraction_form"):
+    col1, col2 = st.columns(2)
+    with col1:
+        extract_recipes = st.checkbox("Recettes", value=True)
+        extract_ingredients = st.checkbox("Ingrédients", value=True)
+    with col2:
+        extract_ing_rec = st.checkbox("Ingrédients_recettes", value=True)
+        extract_menus = st.checkbox("Menus", value=True)
+    
+    submitted = st.form_submit_button("Extraire et Télécharger les données sélectionnées")
 
-    with st.spinner("Extraction des recettes depuis Notion..."):
-        st.session_state.df_recipes_extracted = get_notion_recipes_data()
-        if not st.session_state.df_recipes_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_RECETTES_CSV] = st.session_state.df_recipes_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Recettes extraites : {len(st.session_state.df_recipes_extracted)} lignes.")
-        else:
-            st.error(f"L'extraction des recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_RECETTES_CSV}.")
-            extraction_successful = False
+    if submitted:
+        csv_data_dict = {}
+        extraction_successful = True
+        selected_count = 0
 
-    with st.spinner("Extraction des ingrédients depuis Notion..."):
-        st.session_state.df_ingredients_extracted = get_notion_ingredients_data()
-        if not st.session_state.df_ingredients_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_CSV] = st.session_state.df_ingredients_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Ingrédients extraits : {len(st.session_state.df_ingredients_extracted)} lignes.")
-        else:
-            st.error(f"L'extraction des ingrédients a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_CSV}.")
-            extraction_successful = False
+        if extract_recipes:
+            selected_count += 1
+            with st.spinner("Extraction des recettes depuis Notion..."):
+                st.session_state.df_recipes_extracted = get_notion_recipes_data()
+                if not st.session_state.df_recipes_extracted.empty:
+                    csv_data_dict[FICHIER_EXPORT_RECETTES_CSV] = st.session_state.df_recipes_extracted.to_csv(index=False, encoding="utf-8-sig")
+                    st.success(f"Recettes extraites : {len(st.session_state.df_recipes_extracted)} lignes.")
+                else:
+                    st.error(f"L'extraction des recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_RECETTES_CSV}.")
+                    extraction_successful = False
 
-    with st.spinner("Extraction des liens ingrédients-recettes depuis Notion..."):
-        st.session_state.df_ing_rec_extracted = get_notion_ingredients_recipes_data()
-        if not st.session_state.df_ing_rec_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV] = st.session_state.df_ing_rec_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Liens ingrédients-recettes extraits : {len(st.session_state.df_ing_rec_extracted)} lignes.")
-        else:
-            st.error(f"L'extraction des liens ingrédients-recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV}.")
-            extraction_successful = False
+        if extract_ingredients:
+            selected_count += 1
+            with st.spinner("Extraction des ingrédients depuis Notion..."):
+                st.session_state.df_ingredients_extracted = get_notion_ingredients_data()
+                if not st.session_state.df_ingredients_extracted.empty:
+                    csv_data_dict[FICHIER_EXPORT_INGREDIENTS_CSV] = st.session_state.df_ingredients_extracted.to_csv(index=False, encoding="utf-8-sig")
+                    st.success(f"Ingrédients extraits : {len(st.session_state.df_ingredients_extracted)} lignes.")
+                else:
+                    st.error(f"L'extraction des ingrédients a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_CSV}.")
+                    extraction_successful = False
+
+        if extract_ing_rec:
+            selected_count += 1
+            with st.spinner("Extraction des liens ingrédients-recettes depuis Notion..."):
+                st.session_state.df_ing_rec_extracted = get_notion_ingredients_recipes_data()
+                if not st.session_state.df_ing_rec_extracted.empty:
+                    csv_data_dict[FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV] = st.session_state.df_ing_rec_extracted.to_csv(index=False, encoding="utf-8-sig")
+                    st.success(f"Liens ingrédients-recettes extraits : {len(st.session_state.df_ing_rec_extracted)} lignes.")
+                else:
+                    st.error(f"L'extraction des liens ingrédients-recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV}.")
+                    extraction_successful = False
             
-    with st.spinner("Extraction des menus existants depuis Notion..."):
-        df_menus_from_notion = get_existing_menus_data() # Not storing in session state here as it's for download
-        if df_menus_from_notion is not None and not df_menus_from_notion.empty:
-            csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_from_notion.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Menus existants extraits : {len(df_menus_from_notion)} lignes.")
-        else:
-            st.error(f"L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_MENUS_CSV}.")
-            extraction_successful = False
+        if extract_menus:
+            selected_count += 1
+            with st.spinner("Extraction des menus existants depuis Notion..."):
+                df_menus_from_notion = get_existing_menus_data() # This already returns a formatted DF
+                if df_menus_from_notion is not None and not df_menus_from_notion.empty:
+                    csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_from_notion.to_csv(index=False, encoding="utf-8-sig")
+                    st.success(f"Menus existants extraits : {len(df_menus_from_notion)} lignes.")
+                else:
+                    st.error(f"L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_MENUS_CSV}.")
+                    extraction_successful = False
 
-    if extraction_successful and csv_data_dict:
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for filename, csv_content in csv_data_dict.items():
-                zf.writestr(filename, csv_content.encode('utf-8-sig'))
-        zip_buffer.seek(0)
+        if not selected_count:
+            st.warning("Veuillez sélectionner au moins un type de données à extraire.")
+            extraction_successful = False # Ensure no download button appears if nothing selected
 
-        st.download_button(
-            label=f"Télécharger {FICHIER_EXPORT_GLOBAL_ZIP}",
-            data=zip_buffer.getvalue(),
-            file_name=FICHIER_EXPORT_GLOBAL_ZIP,
-            mime="application/zip",
-        )
-        st.success("Tous les fichiers CSV sont prêts au téléchargement dans un fichier ZIP.")
-    else:
-        st.error("L'extraction des données depuis Notion a échoué pour un ou plusieurs fichiers, ou aucune donnée n'a été retournée.")
+        if extraction_successful and csv_data_dict:
+            if len(csv_data_dict) == 1:
+                # If only one file, offer direct download
+                filename, csv_content = list(csv_data_dict.items())[0]
+                st.download_button(
+                    label=f"Télécharger {filename}",
+                    data=csv_content.encode('utf-8-sig'),
+                    file_name=filename,
+                    mime="text/csv",
+                    key=f"download_{filename}"
+                )
+                st.success(f"Fichier '{filename}' prêt au téléchargement.")
+            elif len(csv_data_dict) > 1:
+                # If multiple files, offer ZIP download
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for filename, csv_content in csv_data_dict.items():
+                        zf.writestr(filename, csv_content.encode('utf-8-sig'))
+                zip_buffer.seek(0)
+
+                st.download_button(
+                    label=f"Télécharger {FICHIER_EXPORT_GLOBAL_ZIP}",
+                    data=zip_buffer.getvalue(),
+                    file_name=FICHIER_EXPORT_GLOBAL_ZIP,
+                    mime="application/zip",
+                    key="download_all_csvs_zip"
+                )
+                st.success("Tous les fichiers CSV sélectionnés sont prêts au téléchargement dans un fichier ZIP.")
+        elif not extraction_successful:
+            st.error("L'extraction des données depuis Notion a échoué pour un ou plusieurs fichiers, ou aucune donnée n'a été retournée.")
 
 
 st.header("3. Génération de Nouveaux Menus (Fonctionnalité à venir)")
 st.markdown("Cette section contiendra les outils pour générer de nouveaux menus basés sur vos critères et les données de vos bases Notion.")
 st.warning("Cette fonctionnalité n'est pas encore implémentée dans cette version du code.")
-
-# --- Nouvelle section pour extraire et télécharger les menus existants de Notion ---
-st.header("4. Extraire les Menus existants depuis Notion")
-st.markdown("Cette section vous permet de télécharger un fichier CSV contenant les menus actuellement enregistrés dans votre base de données Notion.")
-
-if st.button("Extraire et Télécharger les Menus de Notion", key="extract_download_menus_notion"):
-    with st.spinner("Extraction en cours depuis Notion..."):
-        df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
-        if df_menus_extracted is not None and not df_menus_extracted.empty:
-            csv_buffer = io.StringIO()
-            df_menus_extracted.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
-            csv_bytes = csv_buffer.getvalue().encode("utf-8-sig")
-
-            st.download_button(
-                label="Télécharger Menus_extraits_Notion.csv",
-                data=csv_bytes,
-                file_name=FICHIER_EXPORT_MENUS_CSV,
-                mime="text/csv",
-            )
-            st.success("Fichier d'extraction Notion prêt au téléchargement.")
-        else:
-            st.error("L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée.")
 
 st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
 
