@@ -5,7 +5,7 @@ import time
 import httpx
 import io
 import json
-import zipfile # Import added for creating zip files
+import zipfile
 from notion_client import Client
 from notion_client.errors import RequestTimeoutError, APIResponseError
 from datetime import datetime
@@ -49,7 +49,7 @@ except Exception as e:
 def parse_property_value(property_data):
     """Analyse la valeur d'une propriété Notion en fonction de son type."""
     if not isinstance(property_data, dict):
-        return ""
+        return "" # Default empty string for invalid data
 
     prop_type = property_data.get('type')
 
@@ -71,7 +71,6 @@ def parse_property_value(property_data):
         if property_data.get('date') and property_data['date'].get('start'):
             start_date_str = property_data['date']['start']
             try:
-                # Handle ISO format with or without timezone 'Z'
                 dt_object = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
                 return dt_object.strftime('%Y-%m-%d')
             except ValueError:
@@ -97,29 +96,44 @@ def parse_property_value(property_data):
             return ''
         return None
     elif prop_type == 'relation':
+        # Return a comma-separated string of IDs for relations
         return ', '.join([item['id'] for item in property_data.get('relation', [])])
     elif prop_type == 'rollup':
         rollup_data = property_data.get('rollup', {})
         rollup_type = rollup_data.get('type')
-        if rollup_type == 'array':
+
+        if rollup_type == 'array': # Common for rollups of multi-selects, rich_text, numbers etc.
             values = []
             for item in rollup_data.get('array', []):
-                if item.get('type') == 'rich_text':
+                item_type = item.get('type')
+                if item_type == 'rich_text':
                     values.append("".join(t.get("plain_text", "") for t in item.get("rich_text", [])))
-                elif item.get('type') == 'title':
+                elif item_type == 'title':
                     values.append("".join(t.get("text", {}).get("content", "") for t in item.get("title", [])))
-                elif item.get('type') == 'number':
+                elif item_type == 'number':
                     values.append(str(item.get('number')) if item.get('number') is not None else '')
-                elif item.get('type') == 'formula': # Rollup of formula (e.g., Aime_pas_princip)
+                elif item_type == 'formula':
+                    # Recursive call for nested formulas in rollups
                     formula_val = parse_property_value({'type': 'formula', 'formula': item.get('formula')})
                     if formula_val is not None:
                         values.append(str(formula_val))
-            return ', '.join(filter(None, values))
+                elif item_type == 'multi_select': # Rollup of multi-selects
+                    values.extend([ms_item['name'] for ms_item in item.get('multi_select', [])])
+                # Add more array item types as needed
+            return ', '.join(filter(None, values)) # Filter out empty strings before joining
         elif rollup_type == 'number':
             return rollup_data.get('number')
         elif rollup_type == 'string':
             return rollup_data.get('string')
-        # Add more rollup types if necessary
+        elif rollup_type == 'date':
+            date_val = rollup_data.get('date')
+            if date_val and date_val.get('start'):
+                try:
+                    dt_object = datetime.fromisoformat(date_val['start'].replace('Z', '+00:00'))
+                    return dt_object.strftime('%Y-%m-%d')
+                except ValueError:
+                    return date_val['start']
+            return ''
         return None
     elif prop_type == 'created_time':
         return datetime.fromisoformat(property_data['created_time'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
@@ -141,7 +155,7 @@ def parse_property_value(property_data):
         number = uid.get('number')
         return f"{prefix}-{number}" if prefix and number is not None else (str(number) if number is not None else '')
 
-    return None # Return None if the type is not handled
+    return None
 
 def query_notion_database(database_id, filter_obj=None, sort_obj=None, num_rows=NUM_ROWS_TO_EXTRACT):
     """
@@ -159,7 +173,8 @@ def query_notion_database(database_id, filter_obj=None, sort_obj=None, num_rows=
             }
             if filter_obj:
                 query_params["filter"] = filter_obj
-            if sort_obj: # Only add if sort_obj is not None (i.e., it's an array)
+            # Pass sort_obj only if it's not None (i.e., it's an array or a list)
+            if sort_obj is not None:
                 query_params["sorts"] = sort_obj
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
@@ -227,6 +242,9 @@ def get_menus_data():
 
     # Convertir la colonne 'Date' au format YYYY-MM-DD
     if 'Date' in df_menus.columns and not df_menus['Date'].empty:
+        # Ensure the column is of string type before attempting to convert to datetime
+        # This helps if there are non-string types that might cause issues with .dt accessor
+        df_menus['Date'] = df_menus['Date'].astype(str)
         df_menus['Date'] = pd.to_datetime(df_menus['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
 
     # Réordonner les colonnes pour correspondre au CSV d'exemple
@@ -238,22 +256,49 @@ def get_menus_data():
 def get_recipes_data():
     """Extrait et formate les données des recettes depuis Notion."""
     column_mapping = {
-        'Nom': 'Nom_plat', # 'Nom_plat' est le nom de la colonne Title dans Notion
+        'Nom': 'Nom_plat', # 'Nom_plat' est le nom de la colonne Title dans Notion (adjust if your title is simply 'Nom')
         'ID_Recette': 'ID_Recette', # Propriété Unique ID
         'Saison': 'Saison', # Multi-select
         'Calories': 'Calories Recette', # Rollup de nombre
         'Proteines': 'Proteines Recette', # Rollup de nombre
         'Temps_total': 'Temps_total', # Formule
-        'Aime_pas_princip': 'Aime_pas_princip', # Rollup de formule (string)
+        'Aime_pas_princip': 'Aime_pas_princip', # Rollup de formule (string, potentially multi-select rollup)
         'Type_plat': 'Type_plat', # Multi-select
         'Transportable': 'Transportable' # Select ou Checkbox
     }
     df_recettes = extract_dataframe_from_notion(DATABASE_ID_RECETTES, column_mapping, FICHIER_EXPORT_RECETTES_CSV)
 
-    # Réordonner les colonnes pour correspondre au CSV d'exemple (avec Page_ID en premier)
+    # Ensure numerical columns are handled correctly
+    numerical_cols_recettes = ['Calories', 'Proteines', 'Temps_total']
+    for col in numerical_cols_recettes:
+        if col in df_recettes.columns:
+            # Convert to string first to handle potential mixed types or floats that look like strings
+            df_recettes[col] = pd.to_numeric(df_recettes[col].astype(str).str.replace(',', '.'), errors='coerce')
+            df_recettes[col] = df_recettes[col].fillna(0) # Fill NaN with 0 or a more appropriate default
+
+    # Re-verify 'Nom' column mapping. If your Notion database's title property is just 'Nom', change 'Nom_plat' back to 'Nom'
+    # Example: 'Nom': 'Nom'
+    # From your CSV, it appears the title column is simply 'Nom', so let's adjust the mapping if it was 'Nom_plat'
+    # if 'Nom' in df_recettes.columns and 'Nom_plat' not in df_recettes.columns and 'Nom_plat' in column_mapping.values():
+    #     df_recettes = df_recettes.rename(columns={'Nom_plat': 'Nom'}) # This might not be needed if mapping is direct.
+    
+    # Reorder columns to match the example CSV (with Page_ID first)
     if not df_recettes.empty:
+        # Check if 'Nom' or 'Nom_plat' exists, prioritize 'Nom' from CSV example
+        actual_nom_col = 'Nom' if 'Nom' in df_recettes.columns else 'Nom_plat'
+        
+        # Define the exact order of columns as in your provided Recettes.csv
+        # If 'Nom_plat' was the Notion property name for the title, and you want it as 'Nom' in CSV,
+        # ensure column_mapping correctly translates 'Nom' (CSV) to 'Nom_plat' (Notion).
+        # And then here, make sure 'Nom' is used in the final column order.
+        
+        # Assuming 'Nom_plat' was the Notion column for the Title and you want it as 'Nom' in the CSV output.
+        # The column_mapping already handles this: 'Nom': 'Nom_plat'.
+        # So df_recettes will have a 'Nom' column.
+        
         df_recettes = df_recettes[['Page_ID', 'Nom', 'ID_Recette', 'Saison', 'Calories', 'Proteines', 'Temps_total', 'Aime_pas_princip', 'Type_plat', 'Transportable']]
     return df_recettes
+
 
 @st.cache_data(show_spinner="Extraction des ingrédients des recettes depuis Notion...", ttl=3600)
 def get_ingredients_recettes_data():
@@ -265,12 +310,14 @@ def get_ingredients_recettes_data():
     }
     df_ingredients_recettes = extract_dataframe_from_notion(DATABASE_ID_INGREDIENTS_RECETTES, column_mapping, FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV)
 
-    # Convertir 'Qté/pers_s' en numérique
+    # Convertir 'Qté/pers_s' en numérique de manière robuste
     if 'Qté/pers_s' in df_ingredients_recettes.columns:
+        # Convert to string first to handle potential mixed types and then replace comma for decimal
         df_ingredients_recettes['Qté/pers_s'] = pd.to_numeric(
             df_ingredients_recettes['Qté/pers_s'].astype(str).str.replace(',', '.'),
             errors='coerce'
         )
+        df_ingredients_recettes['Qté/pers_s'] = df_ingredients_recettes['Qté/pers_s'].fillna(0) # Fill NaN with 0 or a more appropriate default
 
     # Réordonner les colonnes pour correspondre au CSV d'exemple (avec Page_ID en premier)
     if not df_ingredients_recettes.empty:
@@ -288,12 +335,14 @@ def get_ingredients_data():
     }
     df_ingredients = extract_dataframe_from_notion(DATABASE_ID_INGREDIENTS, column_mapping, FICHIER_EXPORT_INGREDIENTS_CSV)
 
-    # Convertir 'Qte reste' en numérique
+    # Convertir 'Qte reste' en numérique de manière robuste
     if 'Qte reste' in df_ingredients.columns:
+        # Convert to string first to handle potential mixed types and then replace comma for decimal
         df_ingredients['Qte reste'] = pd.to_numeric(
             df_ingredients['Qte reste'].astype(str).str.replace(',', '.'),
             errors='coerce'
         )
+        df_ingredients['Qte reste'] = df_ingredients['Qte reste'].fillna(0) # Fill NaN with 0 or a more appropriate default
 
     # Réordonner les colonnes pour correspondre au CSV d'exemple (avec Page_ID en premier)
     if not df_ingredients.empty:
