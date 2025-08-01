@@ -3,6 +3,7 @@ import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
+import os # Importez le module os
 
 # Configuration du logger pour Streamlit
 # Niveau DEBUG pour voir les détails de filtrage
@@ -701,6 +702,8 @@ class MenuGenerator:
 
 # --- Streamlit UI ---
 
+# --- Streamlit UI ---
+
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
@@ -709,7 +712,6 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
-# --- Chargement des fichiers CSV en un seul clic ---
 # --- Chargement des fichiers CSV en un seul clic ---
 uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
@@ -724,7 +726,7 @@ file_names = [
     "Menus.csv",
     "Ingredients.csv",
     "Ingredients_recettes.csv"
-]  # ← ce ] manquait dans ton code
+]
 
 dataframes = {}
 
@@ -740,47 +742,9 @@ if missing:
     st.stop()
 
 # 2️⃣ Lecture & pré-traitement
-for file_name in file_names:
-    file = file_dict[file_name]
-    try:
-        if file_name == "Planning.csv":
-            file.seek(0)
-            df = pd.read_csv(
-                file,
-                encoding="utf-8",
-                sep=";",          # séparateur français
-                parse_dates=["Date"],
-                dayfirst=True
-            )  # ← cette ) manquait aussi
-        else:
-            df = pd.read_csv(file, encoding="utf-8", sep=",") # bon séparateur
+# Note: Il y a deux blocs "2️⃣ Lecture & pré-traitement". J'ai corrigé le second car c'est celui qui est utilisé.
+# Vous pourriez envisager de supprimer le premier bloc redondant pour plus de clarté.
 
-
-        # Normalisations communes
-        if "Temps_total" in df.columns:
-            df["Temps_total"] = (
-                pd.to_numeric(df["Temps_total"], errors="coerce")
-                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
-                  .astype(int)
-            )
-        for col in ["Calories", "Proteines"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        dataframes[file_name.replace(".csv", "")] = df
-        st.sidebar.success(f"{file_name} chargé.")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
-        st.stop()
-
-
-file_dict = {f.name: f for f in uploaded_files}
-missing = [fn for fn in file_names if fn not in file_dict]
-if missing:
-    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
-    st.stop()
-
-# 2️⃣ Lecture & pré-traitement identiques au notebook Colab
 for file_name in file_names:
     file = file_dict[file_name]
     try:
@@ -794,7 +758,8 @@ for file_name in file_names:
                 dayfirst=True
             )
         else:
-            df = pd.read_csv(file, encoding="utf-8")
+            # CORRECTION ICI: Ajout de sep="," pour les fichiers non-Planning
+            df = pd.read_csv(file, encoding="utf-8", sep=",")
 
         # Normalisations communes
         if "Temps_total" in df.columns:
