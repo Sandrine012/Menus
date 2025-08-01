@@ -84,14 +84,19 @@ def zone_telechargements():
 # 3.  Ajout dans votre main()
 # --------------------------------------------------
 def main():
-    # ... tout votre code existant ...
+    # … votre code (chargement Notion, traitements, etc.) …
 
-    # Après la génération de df_menus_complet  ➜ stocke dans session_state
-    if 'df_menus_gen' not in st.session_state and not df_menus_complet.empty:
+    # Vérifie d’abord que df_menus_complet existe et est un DataFrame
+    if (
+        'df_menus_gen' not in st.session_state
+        and 'df_menus_complet' in locals()        # ou globals() selon votre portée
+        and isinstance(df_menus_complet, pd.DataFrame)
+        and not df_menus_complet.empty
+    ):
         st.session_state['df_menus_gen'] = df_menus_complet[['Date', 'Participant(s)', 'Nom']]
 
-    # Place la nouvelle zone de téléchargement à la fin
     zone_telechargements()
+
 
     # ... fin main ...
 
