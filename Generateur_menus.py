@@ -718,7 +718,7 @@ NOMS_CSV_ATTENDUS = [
     "Planning.csv",
     "Menus.csv",
     "Ingredients.csv",
-    "Ingredients_recettes.csv",
+    "Ingredients_recettes.csv"
 ]
 
 uploaded_files = st.sidebar.file_uploader(
@@ -802,18 +802,6 @@ except Exception as e:
     st.stop()
 # --------------------------------------------------------------
 
-
-    # Vérification des colonnes essentielles après le chargement
-    try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
-        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
-        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
-
-    except ValueError:
-        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
-        st.stop()          # ← remplace ‘return’
 
 
     st.markdown("---")
