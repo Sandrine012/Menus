@@ -713,13 +713,16 @@ def main():
     import io, pandas as pd, streamlit as st      # déjà importés plus haut, mais inoffensif si re-importés
     
    # ---------- Chargement des 5 CSV via un seul widget ----------
+# --- Chargement des 5 CSV via un seul widget -----------------
+import io, pandas as pd, streamlit as st
+
 NOMS_CSV_ATTENDUS = [
     "Recettes.csv",
     "Planning.csv",
     "Menus.csv",
     "Ingredients.csv",
     "Ingredients_recettes.csv"
-]
+]  #  ← crochet fermant ajouté ici ✅
 
 uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
@@ -733,12 +736,13 @@ if not uploaded_files:
     st.stop()
 
 file_dict = {f.name: f for f in uploaded_files}
+
 missing = [fn for fn in NOMS_CSV_ATTENDUS if fn not in file_dict]
 if missing:
     st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
     st.stop()
 
-# --- Lecture dans le dictionnaire `dataframes`
+# --- Lecture des fichiers dans le dictionnaire `dataframes` ---
 dataframes = {}
 for fn in NOMS_CSV_ATTENDUS:
     buffer = io.StringIO(file_dict[fn].getvalue().decode("utf-8"))
@@ -748,6 +752,8 @@ for fn in NOMS_CSV_ATTENDUS:
         df = pd.read_csv(buffer, sep=";")
     dataframes[fn.replace(".csv", "")] = df
     st.sidebar.success(f"{fn} chargé.")
+# --------------------------------------------------------------
+
 
 # ---------- Post-traitements sur le DataFrame Recettes ----------
 if "Temps_total" in dataframes["Recettes"].columns:
