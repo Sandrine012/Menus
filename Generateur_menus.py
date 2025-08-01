@@ -712,62 +712,96 @@ def main():
     # --- Chargement des 5 CSV via UN SEUL widget ---
     import io, pandas as pd, streamlit as st      # déjà importés plus haut, mais inoffensif si re-importés
     
-    NOMS_CSV_ATTENDUS = [
-        "Recettes.csv",
-        "Planning.csv",
-        "Menus.csv",
-        "Ingredients.csv",
-        "Ingredients_recettes.csv",
-    ]
-    
-    uploaded_files = st.sidebar.file_uploader(
-        "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
-        type="csv",
-        accept_multiple_files=True,
-        key="multi_csv_upload",
+   # ---------- Chargement des 5 CSV via un seul widget ----------
+NOMS_CSV_ATTENDUS = [
+    "Recettes.csv",
+    "Planning.csv",
+    "Menus.csv",
+    "Ingredients.csv",
+    "Ingredients_recettes.csv",
+]
+
+uploaded_files = st.sidebar.file_uploader(
+    "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
+    type="csv",
+    accept_multiple_files=True,
+    key="multi_csv_upload",
+)
+
+if not uploaded_files:
+    st.info("Chargez les cinq fichiers pour continuer.")
+    st.stop()
+
+file_dict = {f.name: f for f in uploaded_files}
+missing = [fn for fn in NOMS_CSV_ATTENDUS if fn not in file_dict]
+if missing:
+    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
+    st.stop()
+
+# --- Lecture dans le dictionnaire `dataframes`
+dataframes = {}
+for fn in NOMS_CSV_ATTENDUS:
+    buffer = io.StringIO(file_dict[fn].getvalue().decode("utf-8"))
+    if fn == "Planning.csv":
+        df = pd.read_csv(buffer, sep=";", parse_dates=["Date"], dayfirst=True)
+    else:
+        df = pd.read_csv(buffer, sep=";")
+    dataframes[fn.replace(".csv", "")] = df
+    st.sidebar.success(f"{fn} chargé.")
+
+# ---------- Post-traitements sur le DataFrame Recettes ----------
+if "Temps_total" in dataframes["Recettes"].columns:
+    dataframes["Recettes"]["Temps_total"] = (
+        pd.to_numeric(
+            dataframes["Recettes"]["Temps_total"],
+            errors="coerce"
+        )
+        .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
+        .astype(int)
     )
-    
-    # --- Arrêt propre si aucun fichier n’est encore chargé
-    if not uploaded_files:
-        st.info("Chargez les cinq fichiers pour continuer.")
-        st.stop()
-    
-    # --- Vérifier que les 5 fichiers attendus sont bien présents
-    file_dict = {f.name: f for f in uploaded_files}
-    missing = [fn for fn in NOMS_CSV_ATTENDUS if fn not in file_dict]
-    if missing:
-        st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
-        st.stop()
-    
-    # --- Lecture dans le dictionnaire `dataframes`
-    dataframes = {}
-    for fn in NOMS_CSV_ATTENDUS:
-        buffer = io.StringIO(file_dict[fn].getvalue().decode("utf-8"))
-        if fn == "Planning.csv":
-            df = pd.read_csv(buffer, sep=";", parse_dates=["Date"], dayfirst=True)
-        else:
-            df = pd.read_csv(buffer, sep=";")
-        dataframes[fn.replace(".csv", "")] = df
-        st.sidebar.success(f"{fn} chargé.")
-    # ------------------------------------------------
 
-# Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
-if "Temps_total" in df.columns:
-    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-if "Calories" in df.columns:
-    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
-if "Proteines" in df.columns:
-    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+for col in ["Calories", "Proteines"]:
+    if col in dataframes["Recettes"].columns:
+        dataframes["Recettes"][col] = pd.to_numeric(
+            dataframes["Recettes"][col], errors="coerce"
+        )
 
+# ---------- Vérification des colonnes obligatoires ----------
+try:
+    verifier_colonnes(
+        dataframes["Recettes"],
+        [
+            COLONNE_ID_RECETTE,
+            COLONNE_NOM,
+            COLONNE_TEMPS_TOTAL,
+            COLONNE_AIME_PAS_PRINCIP,
+            "Transportable",
+            "Calories",
+            "Proteines",
+        ],
+        "Recettes.csv",
+    )
+    verifier_colonnes(
+        dataframes["Planning"],
+        ["Date", "Participants", "Transportable", "Temps", "Nutrition"],
+        "Planning.csv",
+    )
+    verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
+    verifier_colonnes(
+        dataframes["Ingredients"],
+        [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"],
+        "Ingredients.csv",
+    )
+    verifier_colonnes(
+        dataframes["Ingredients_recettes"],
+        [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"],
+        "Ingredients_recettes.csv",
+    )
+except Exception as e:
+    st.error(f"Erreur de structure dans un CSV : {e}")
+    st.stop()
+# --------------------------------------------------------------
 
-        # --- ajout au dictionnaire ---
-           dataframes[file_name.replace(".csv", "")] = df
-        st.sidebar.success(f"{file_name} chargé avec succès.")
-
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
-         all_files_uploaded = False
-         break                       # ⬅︎ sort de la boucle
 
     # Vérification des colonnes essentielles après le chargement
     try:
