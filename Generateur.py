@@ -260,7 +260,7 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
 
     df = df[final_cols] # Ensure column order
     
-    # --- AJOUT POUR LA CONVERSION DE DATE ---
+    # --- AJOUT POUR LA CONVERSION DE DATE (pour données extraites de Notion) ---
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
     # --- FIN AJOUT ---
@@ -317,6 +317,18 @@ def get_existing_menus_data():
     logger.info(f"Extraction de {len(df_menus)} menus existants terminée.")
     return df_menus
 
+# --- Initialisation de session_state pour stocker les DataFrames ---
+if 'df_menus_local' not in st.session_state:
+    st.session_state.df_menus_local = pd.DataFrame()
+if 'df_recipes_extracted' not in st.session_state:
+    st.session_state.df_recipes_extracted = pd.DataFrame()
+if 'df_ingredients_extracted' not in st.session_state:
+    st.session_state.df_ingredients_extracted = pd.DataFrame()
+if 'df_ing_rec_extracted' not in st.session_state:
+    st.session_state.df_ing_rec_extracted = pd.DataFrame()
+# Ajoutez d'autres DataFrames si nécessaire pour la génération future
+
+
 # --- Section Streamlit ---
 st.set_page_config(layout="wide")
 st.title("Application de Génération de Menus Notion")
@@ -327,44 +339,44 @@ st.info("Assurez-vous que les bases de données Notion sont accessibles et conti
 
 
 st.header("2. Extraction des Données de Notion vers CSV/ZIP")
-st.markdown("Cliquez sur le bouton ci-dessous pour extraire toutes les données de vos bases Notion (Recettes, Ingrédients, Ingrédients_recettes) et les télécharger dans un fichier ZIP.")
+st.markdown("Cliquez sur le bouton ci-dessous pour extraire toutes les données de vos bases Notion (Recettes, Ingrédients, Ingrédients_recettes, Menus) et les télécharger dans un fichier ZIP.")
 
 if st.button("Extraire et Télécharger Toutes les Données de Notion"):
     csv_data_dict = {}
     extraction_successful = True
 
     with st.spinner("Extraction des recettes depuis Notion..."):
-        df_recipes_extracted = get_notion_recipes_data()
-        if df_recipes_extracted is not None and not df_recipes_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_RECETTES_CSV] = df_recipes_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Recettes extraites : {len(df_recipes_extracted)} lignes.")
+        st.session_state.df_recipes_extracted = get_notion_recipes_data()
+        if not st.session_state.df_recipes_extracted.empty:
+            csv_data_dict[FICHIER_EXPORT_RECETTES_CSV] = st.session_state.df_recipes_extracted.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Recettes extraites : {len(st.session_state.df_recipes_extracted)} lignes.")
         else:
             st.error(f"L'extraction des recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_RECETTES_CSV}.")
             extraction_successful = False
 
     with st.spinner("Extraction des ingrédients depuis Notion..."):
-        df_ingredients_extracted = get_notion_ingredients_data()
-        if df_ingredients_extracted is not None and not df_ingredients_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_CSV] = df_ingredients_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Ingrédients extraits : {len(df_ingredients_extracted)} lignes.")
+        st.session_state.df_ingredients_extracted = get_notion_ingredients_data()
+        if not st.session_state.df_ingredients_extracted.empty:
+            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_CSV] = st.session_state.df_ingredients_extracted.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Ingrédients extraits : {len(st.session_state.df_ingredients_extracted)} lignes.")
         else:
             st.error(f"L'extraction des ingrédients a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_CSV}.")
             extraction_successful = False
 
     with st.spinner("Extraction des liens ingrédients-recettes depuis Notion..."):
-        df_ing_rec_extracted = get_notion_ingredients_recipes_data()
-        if df_ing_rec_extracted is not None and not df_ing_rec_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV] = df_ing_rec_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Liens ingrédients-recettes extraits : {len(df_ing_rec_extracted)} lignes.")
+        st.session_state.df_ing_rec_extracted = get_notion_ingredients_recipes_data()
+        if not st.session_state.df_ing_rec_extracted.empty:
+            csv_data_dict[FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV] = st.session_state.df_ing_rec_extracted.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Liens ingrédients-recettes extraits : {len(st.session_state.df_ing_rec_extracted)} lignes.")
         else:
             st.error(f"L'extraction des liens ingrédients-recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV}.")
             extraction_successful = False
             
     with st.spinner("Extraction des menus existants depuis Notion..."):
-        df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
-        if df_menus_extracted is not None and not df_menus_extracted.empty:
-            csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_extracted.to_csv(index=False, encoding="utf-8-sig")
-            st.success(f"Menus existants extraits : {len(df_menus_extracted)} lignes.")
+        df_menus_from_notion = get_existing_menus_data() # Not storing in session state here as it's for download
+        if df_menus_from_notion is not None and not df_menus_from_notion.empty:
+            csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_from_notion.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Menus existants extraits : {len(df_menus_from_notion)} lignes.")
         else:
             st.error(f"L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_MENUS_CSV}.")
             extraction_successful = False
@@ -391,11 +403,11 @@ st.header("3. Génération de Nouveaux Menus (Fonctionnalité à venir)")
 st.markdown("Cette section contiendra les outils pour générer de nouveaux menus basés sur vos critères et les données de vos bases Notion.")
 st.warning("Cette fonctionnalité n'est pas encore implémentée dans cette version du code.")
 
-
+# --- Nouvelle section pour charger un fichier Menus CSV localement ---
 st.header("4. Extraire les Menus existants depuis Notion")
 st.markdown("Cette section vous permet de télécharger un fichier CSV contenant les menus actuellement enregistrés dans votre base de données Notion.")
 
-if st.button("Extraire et Télécharger les Menus de Notion"):
+if st.button("Extraire et Télécharger les Menus de Notion", key="extract_download_menus_notion"):
     with st.spinner("Extraction en cours depuis Notion..."):
         df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
         if df_menus_extracted is not None and not df_menus_extracted.empty:
@@ -406,13 +418,44 @@ if st.button("Extraire et Télécharger les Menus de Notion"):
             st.download_button(
                 label="Télécharger Menus_extraits_Notion.csv",
                 data=csv_bytes,
-                file_name=FICHIER_EXPORT_MENUS_CSV, # Utiliser le nom de fichier correct ici
+                file_name=FICHIER_EXPORT_MENUS_CSV,
                 mime="text/csv",
             )
             st.success("Fichier d'extraction Notion prêt au téléchargement.")
         else:
             st.error("L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée.")
 
+st.header("5. Charger un fichier Menus CSV pour la génération")
+st.markdown("Chargez ici un fichier CSV de menus (par exemple, un fichier exporté précédemment ou un `Menus.csv` que vous avez préparé) pour être utilisé dans la génération ou l'analyse.")
+
+uploaded_file = st.file_uploader("Choisissez un fichier CSV de Menus", type=["csv"])
+
+if uploaded_file is not None:
+    try:
+        df_uploaded_menus = pd.read_csv(uploaded_file)
+        
+        # --- Conversion de la colonne 'Date' pour le fichier local ---
+        if 'Date' in df_uploaded_menus.columns:
+            df_uploaded_menus['Date'] = pd.to_datetime(df_uploaded_menus['Date'], errors='coerce')
+            st.success("La colonne 'Date' du fichier CSV chargé a été convertie en format date/heure.")
+        else:
+            st.warning("La colonne 'Date' n'a pas été trouvée dans le fichier CSV chargé. Veuillez vérifier le nom de la colonne.")
+
+        st.session_state.df_menus_local = df_uploaded_menus
+        st.success(f"Fichier '{uploaded_file.name}' chargé avec succès. {len(df_uploaded_menus)} lignes détectées.")
+        
+        st.subheader("Aperçu des menus chargés :")
+        st.dataframe(df_uploaded_menus.head())
+
+        # Exemple d'utilisation de .dt pour vérifier (peut être supprimé en production)
+        if 'Date' in df_uploaded_menus.columns and pd.api.types.is_datetime64_any_dtype(df_uploaded_menus['Date']):
+            st.info(f"Année de la première date chargée : {df_uploaded_menus['Date'].min().year}")
+        else:
+            st.warning("La colonne 'Date' n'est pas au format datetime après le chargement, vérifiez le format de vos données ou le nom de la colonne.")
+
+    except Exception as e:
+        st.error(f"Une erreur est survenue lors du chargement ou du traitement du fichier CSV : {e}")
+        st.info("Veuillez vous assurer que le fichier est un CSV valide et que la colonne 'Date' (si présente) a un format reconnaissable.")
 
 st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
 
