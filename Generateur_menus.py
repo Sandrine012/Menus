@@ -760,15 +760,14 @@ if "Proteines" in df.columns:
     df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
 
 
-dataframes[file_name.replace(".csv", "")] = df
-st.sidebar.success(f"{file_name} chargé avec succès.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                all_files_uploaded = False
-                break
-        else:
-            all_files_uploaded = False
-            break
+        # --- ajout au dictionnaire ---
+           dataframes[file_name.replace(".csv", "")] = df
+        st.sidebar.success(f"{file_name} chargé avec succès.")
+
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
+         all_files_uploaded = False
+         break                       # ⬅︎ sort de la boucle
 
     # Vérification des colonnes essentielles après le chargement
     try:
