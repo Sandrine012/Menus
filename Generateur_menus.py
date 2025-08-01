@@ -714,7 +714,7 @@ uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
     type="csv",
     accept_multiple_files=True,
-    key="multi_csv_upload"
+    key="multi_csv_upload")
 )
 
 dataframes = {}
