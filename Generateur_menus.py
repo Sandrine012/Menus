@@ -714,16 +714,17 @@ uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
     type="csv",
     accept_multiple_files=True,
-    key="multi_csv_upload")
+    key="multi_csv_upload"      # ← parenthèse fermante juste après
+)
 
-dataframes = {}
 file_names = [
     "Recettes.csv",
     "Planning.csv",
     "Menus.csv",
     "Ingredients.csv",
     "Ingredients_recettes.csv"
-]
+]                               # ← parenthèse fermante de la liste
+
 
 # 1️⃣ Vérifier que les 5 fichiers attendus sont présents
 if uploaded_files is None or len(uploaded_files) < 5:
