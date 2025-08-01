@@ -709,53 +709,67 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
-    uploaded_files = {}
-    file_names = ["Recettes.csv", "Planning.csv", "Menus.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
-    for file_name in file_names:
-        uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
+# --- Chargement des fichiers CSV en un seul clic ---
+uploaded_files = st.sidebar.file_uploader(
+    "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
+    type="csv",
+    accept_multiple_files=True,
+    key="multi_csv_upload"
+)
 
-    dataframes = {}
-    all_files_uploaded = True
-    for file_name, uploaded_file in uploaded_files.items():
-        if uploaded_file is not None:
-            try:
-                if file_name == "Planning.csv":
-                    uploaded_file.seek(0)
-                    # Lire Planning.csv avec parsing de la date, délimiteur ';' et dayfirst=True pour le bon format français
-                    df = pd.read_csv(
-                        uploaded_file,
-                        encoding='utf-8',
-                        sep=';',
-                        parse_dates=['Date'],
-                        dayfirst=True
-                    )
-                else:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                # ...
+dataframes = {}
+file_names = [
+    "Recettes.csv",
+    "Planning.csv",
+    "Menus.csv",
+    "Ingredients.csv",
+    "Ingredients_recettes.csv"
+]
 
+# 1️⃣ Vérifier que les 5 fichiers attendus sont présents
+if uploaded_files is None or len(uploaded_files) < 5:
+    st.warning("Veuillez sélectionner les 5 fichiers CSV requis pour continuer.")
+    st.stop()
 
-                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
-                if "Temps_total" in df.columns:
-                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-                if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
-                if "Proteines" in df.columns:
-                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+file_dict = {f.name: f for f in uploaded_files}
+missing = [fn for fn in file_names if fn not in file_dict]
+if missing:
+    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
+    st.stop()
 
-
-                dataframes[file_name.replace(".csv", "")] = df
-                st.sidebar.success(f"{file_name} chargé avec succès.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                all_files_uploaded = False
-                break
+# 2️⃣ Lecture & pré-traitement identiques au notebook Colab
+for file_name in file_names:
+    file = file_dict[file_name]
+    try:
+        if file_name == "Planning.csv":
+            file.seek(0)  # remise à zéro du pointeur
+            df = pd.read_csv(
+                file,
+                encoding="utf-8",
+                sep=";",              # séparateur français
+                parse_dates=["Date"],
+                dayfirst=True
+            )
         else:
-            all_files_uploaded = False
-            break
+            df = pd.read_csv(file, encoding="utf-8")
 
-    if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
-        return
+        # Normalisations communes
+        if "Temps_total" in df.columns:
+            df["Temps_total"] = (
+                pd.to_numeric(df["Temps_total"], errors="coerce")
+                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
+                  .astype(int)
+            )
+        for col in ["Calories", "Proteines"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        dataframes[file_name.replace(".csv", "")] = df
+        st.sidebar.success(f"{file_name} chargé.")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
+        st.stop()
+
 
     # Vérification des colonnes essentielles après le chargement
     try:
