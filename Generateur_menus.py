@@ -751,13 +751,13 @@ def main():
         st.sidebar.success(f"{fn} chargé.")
     # ------------------------------------------------
 
-                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
-                if "Temps_total" in df.columns:
-                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-                if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
-                if "Proteines" in df.columns:
-                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+# Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
+if "Temps_total" in df.columns:
+    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+if "Calories" in df.columns:
+    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
+if "Proteines" in df.columns:
+    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
 
 
                 dataframes[file_name.replace(".csv", "")] = df
