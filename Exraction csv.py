@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import logging
 import time
-import httpx
+import httpx # Assurez-vous que httpx est importé
 import io
 import json
 import zipfile
@@ -20,7 +20,7 @@ NUM_ROWS_TO_EXTRACT = 100000 # Augmenté pour l'extraction des menus
 BATCH_SIZE = 50
 MAX_RETRIES = 7
 RETRY_DELAY_INITIAL = 10
-API_TIMEOUT_SECONDS = 180
+API_TIMEOUT_SECONDS = 180 # Gardons cette constante pour le timeout HTTPX
 
 # --- Noms de fichiers pour l'export CSV ---
 FICHIER_EXPORT_MENUS_CSV = "Menus.csv"
@@ -36,8 +36,12 @@ try:
     DATABASE_ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
     DATABASE_ID_RECETTES = st.secrets["notion_database_id_recettes"]
     DATABASE_ID_MENUS = st.secrets["notion_database_id_menus"]
-    notion = Client(auth=NOTION_API_KEY, timeout_seconds=API_TIMEOUT_SECONDS)
-    logger.info("Client Notion initialisé.")
+
+    # Correction ici : Créer un client httpx avec le timeout, puis le passer au client Notion
+    http_client_with_timeout = httpx.Client(timeout=API_TIMEOUT_SECONDS)
+    notion = Client(auth=NOTION_API_KEY, http_client=http_client_with_timeout)
+    
+    logger.info("Client Notion initialisé avec timeout.")
 except Exception as e:
     st.error(f"Erreur de configuration ou de connexion à Notion : {e}")
     st.info("Veuillez vous assurer que les secrets Notion sont correctement configurés dans Streamlit Cloud.")
@@ -104,7 +108,6 @@ def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key)
                     if item.get("type") == "formula":
                         fo = item.get("formula", {}); ft = fo.get("type")
                         if ft == "string": sv = fo.get("string"); vals.append(sv if sv and sv.strip() else ".")
-                        else: vals.append(".")
                     else: vals.append(".")
                 return ", ".join(vals)
             return ""
