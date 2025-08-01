@@ -4,6 +4,7 @@ import random
 import logging
 from datetime import datetime, timedelta
 import os # Importez le module os
+import io
 
 # Configuration du logger pour Streamlit
 # Niveau DEBUG pour voir les détails de filtrage
@@ -742,39 +743,47 @@ if missing:
     st.stop()
 
 # 2️⃣ Lecture & pré-traitement
-# Note: Il y a deux blocs "2️⃣ Lecture & pré-traitement". J'ai corrigé le second car c'est celui qui est utilisé.
-# Vous pourriez envisager de supprimer le premier bloc redondant pour plus de clarté.
-
 for file_name in file_names:
     file = file_dict[file_name]
     try:
+        # Lisez le contenu du fichier uploadé en mémoire
+        # On utilise .read().decode('utf-8') pour obtenir le contenu textuel
+        # puis io.StringIO pour que pandas puisse le lire comme un fichier
+        file_content = file.read().decode('utf-8')
+        file_buffer = io.StringIO(file_content)
+
         if file_name == "Planning.csv":
-            file.seek(0)  # remise à zéro du pointeur
             df = pd.read_csv(
-                file,
-                encoding="utf-8",
-                sep=";",              # séparateur français
+                file_buffer,  # Utilisez le buffer ici
+                encoding="utf-8", # L'encodage est déjà appliqué par .decode() mais peut être laissé pour consistance
+                sep=";",
                 parse_dates=["Date"],
                 dayfirst=True
             )
-            # ----- AJOUTEZ CES LIGNES POUR DÉBOGAGE SUPPLÉMENTAIRE -----
+            # Les prints de débogage précédents ici sont utiles
             print(f"DEBUG: Après pd.read_csv pour Planning.csv. Type de df: {type(df)}")
             if isinstance(df, pd.DataFrame):
                 print(f"DEBUG: Planning.csv - df.empty: {df.empty}, df.columns: {df.columns.tolist()}")
-            # -------------------------------------------------------------
+            
         else:
-            df = pd.read_csv(file, encoding="utf-8", sep=",")
-
+            df = pd.read_csv(file_buffer, encoding="utf-8", sep=",") # Utilisez le buffer ici
+            
         # Normalisations communes
-        # ... (votre code de normalisation) ...
+        if "Temps_total" in df.columns:
+            df["Temps_total"] = (
+                pd.to_numeric(df["Temps_total"], errors="coerce")
+                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
+                  .astype(int)
+            )
+        for col in ["Calories", "Proteines"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
         dataframes[file_name.replace(".csv", "")] = df
-        # ----- AJOUTEZ CETTE LIGNE POUR DÉBOGAGE SUPPLÉMENTAIRE -----
         print(f"DEBUG: Clé '{file_name.replace('.csv', '')}' ajoutée à dataframes. Contenu de dataframes: {dataframes.keys()}")
-        # -------------------------------------------------------------
         st.sidebar.success(f"{file_name} chargé.")
     except Exception as e:
-        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}") # Cette ligne est déjà là normalement
+        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}")
         st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
         st.stop()
 
