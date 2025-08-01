@@ -781,7 +781,6 @@ for file_name in file_names:
 
     except ValueError:
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
-        return
 
     st.markdown("---")
     st.header("1. Générer le Menu")
