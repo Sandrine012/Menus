@@ -721,6 +721,12 @@ uploaded_files = st.sidebar.file_uploader(
     key="multi_csv_upload"
 )
 
+# 🌟 Protection n°1 – rien n’est encore chargé
+if uploaded_files is None or len(uploaded_files) == 0:
+    st.info("Chargez les cinq fichiers pour commencer.")
+    st.stop()
+
+
 file_names = [
     "Recettes.csv",
     "Planning.csv",
@@ -729,7 +735,26 @@ file_names = [
     "Ingredients_recettes.csv"
 ]
 
+# --- Lecture & pré-traitement --------------------------------
 dataframes = {}
+
+for file_name in file_names:          # ⇦ 1. Boucle de lecture
+    file = file_dict[file_name]
+    #  … ton code pd.read_csv(…) …
+    dataframes[file_name.replace(".csv", "")] = df
+
+# ⇩ 2. Bloc de protection immédiat
+if "Planning" not in dataframes:      # vérifie que le CSV Planning a été chargé
+    st.error("Le fichier Planning.csv n’a pas été chargé ou son nom est incorrect.")
+    st.stop()
+
+verifier_colonnes(                    # contrôle des en-têtes attendus
+    dataframes["Planning"],
+    ["Date", "Participants", "Transportable", "Temps", "Nutrition"],
+    "Planning.csv"
+)
+# --------------------------------------------------------------
+
 
 # 1️⃣ Vérifier la présence des 5 fichiers
 if uploaded_files is None or len(uploaded_files) < 5:
