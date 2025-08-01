@@ -715,7 +715,6 @@ uploaded_files = st.sidebar.file_uploader(
     type="csv",
     accept_multiple_files=True,
     key="multi_csv_upload")
-)
 
 dataframes = {}
 file_names = [
