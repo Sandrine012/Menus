@@ -746,7 +746,6 @@ if missing:
 # Vous pourriez envisager de supprimer le premier bloc redondant pour plus de clarté.
 
 for file_name in file_names:
-for file_name in file_names:
     file = file_dict[file_name]
     try:
         if file_name == "Planning.csv":
