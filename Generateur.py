@@ -37,7 +37,6 @@ try:
     DATABASE_ID_RECETTES = st.secrets["notion_database_id_recettes"]
     DATABASE_ID_MENUS = st.secrets["notion_database_id_menus"]
     
-    # Correction ici: revenir à l'initialisation simple, sans http_client
     notion = Client(auth=NOTION_API_KEY)
     
     logger.info("Client Notion initialisé.")
@@ -54,7 +53,7 @@ def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key)
     try:
         if expected_format_key == "title":
             return "".join(t.get("text", {}).get("content", "") for t in prop_data.get("title", []))
-        elif expected_format_key == "rollup_text_concat": # Gardé au cas où même si Ingredients_quantite est retiré
+        elif expected_format_key == "rollup_text_concat":
             if prop_type == "rollup":
                 arr = prop_data.get("rollup", {}).get("array", [])
                 values = []
@@ -259,7 +258,14 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
             final_cols.append(col)
             logger.warning(f"La colonne '{col}' n'était pas présente dans les données extraites et a été ajoutée vide.")
 
-    return df[final_cols]
+    df = df[final_cols] # Ensure column order
+    
+    # --- AJOUT POUR LA CONVERSION DE DATE ---
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    # --- FIN AJOUT ---
+
+    return df
 
 
 def get_notion_recipes_data():
