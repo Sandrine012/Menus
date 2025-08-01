@@ -3,6 +3,8 @@ import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
+import os # Importez le module os
+import io
 
 # Configuration du logger pour Streamlit
 # Niveau DEBUG pour voir les détails de filtrage
@@ -701,6 +703,8 @@ class MenuGenerator:
 
 # --- Streamlit UI ---
 
+# --- Streamlit UI ---
+
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
@@ -709,52 +713,124 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
-    uploaded_files = {}
-    file_names = ["Recettes.csv", "Planning.csv", "Menus.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
-    for file_name in file_names:
-        uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
+# --- Chargement des fichiers CSV en un seul clic ---
+uploaded_files = st.sidebar.file_uploader(
+    "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
+    type="csv",
+    accept_multiple_files=True,
+    key="multi_csv_upload"
+)
 
-    dataframes = {}
-    all_files_uploaded = True
-    for file_name, uploaded_file in uploaded_files.items():
-        if uploaded_file is not None:
-            try:
-                # Gérer le délimiteur pour Planning.csv spécifiquement s'il y a un ';'
-                if file_name == "Planning.csv":
-                    # Tentative de lire avec le délimiteur par défaut (virgule), puis avec point-virgule
-                    uploaded_file.seek(0) # Remettre le pointeur au début du fichier
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                    if len(df.columns) == 1 and ';' in df.iloc[0, 0]: # Vérifier si c'est un CSV avec ';' comme séparateur
-                        uploaded_file.seek(0) # Remettre le pointeur au début du fichier
-                        df = pd.read_csv(uploaded_file, encoding='utf-8', sep=';')
-                else:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-
-                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
-                if "Temps_total" in df.columns:
-                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-                if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
-                if "Proteines" in df.columns:
-                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+# 🌟 Protection n°1 – rien n’est encore chargé
+if uploaded_files is None or len(uploaded_files) == 0:
+    st.info("Chargez les cinq fichiers pour commencer.")
+    st.stop()
 
 
-                dataframes[file_name.replace(".csv", "")] = df
-                st.sidebar.success(f"{file_name} chargé avec succès.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                all_files_uploaded = False
-                break
+file_names = [
+    "Recettes.csv",
+    "Planning.csv",
+    "Menus.csv",
+    "Ingredients.csv",
+    "Ingredients_recettes.csv"
+]
+
+# --- Lecture & pré-traitement --------------------------------
+dataframes = {}
+
+for file_name in file_names:          # ⇦ 1. Boucle de lecture
+    file = file_dict[file_name]
+    #  … ton code pd.read_csv(…) …
+    dataframes[file_name.replace(".csv", "")] = df
+
+# ⇩ 2. Bloc de protection immédiat
+if "Planning" not in dataframes:      # vérifie que le CSV Planning a été chargé
+    st.error("Le fichier Planning.csv n’a pas été chargé ou son nom est incorrect.")
+    st.stop()
+
+verifier_colonnes(                    # contrôle des en-têtes attendus
+    dataframes["Planning"],
+    ["Date", "Participants", "Transportable", "Temps", "Nutrition"],
+    "Planning.csv"
+)
+# --------------------------------------------------------------
+
+
+# 1️⃣ Vérifier la présence des 5 fichiers
+if uploaded_files is None or len(uploaded_files) < 5:
+    st.warning("Veuillez sélectionner les 5 fichiers CSV requis pour continuer.")
+    st.stop()
+
+file_dict = {f.name: f for f in uploaded_files}
+missing = [fn for fn in file_names if fn not in file_dict]
+if missing:
+    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
+    st.stop()
+
+# 2️⃣ Lecture & pré-traitement
+for file_name in file_names:
+    file = file_dict[file_name]
+    try:
+        # Lisez le contenu du fichier uploadé en mémoire
+        # On utilise .read().decode('utf-8') pour obtenir le contenu textuel
+        # puis io.StringIO pour que pandas puisse le lire comme un fichier
+        file_content = file.read().decode('utf-8')
+        file_buffer = io.StringIO(file_content)
+
+        if file_name == "Planning.csv":
+            df = pd.read_csv(
+                file_buffer,  # Utilisez le buffer ici
+                encoding="utf-8", # L'encodage est déjà appliqué par .decode() mais peut être laissé pour consistance
+                sep=";",
+                parse_dates=["Date"],
+                dayfirst=True
+            )
+            # Les prints de débogage précédents ici sont utiles
+            print(f"DEBUG: Après pd.read_csv pour Planning.csv. Type de df: {type(df)}")
+            if isinstance(df, pd.DataFrame):
+                print(f"DEBUG: Planning.csv - df.empty: {df.empty}, df.columns: {df.columns.tolist()}")
+            
         else:
-            all_files_uploaded = False
-            break
+            df = pd.read_csv(file_buffer, encoding="utf-8", sep=",") # Utilisez le buffer ici
+            
+        # Normalisations communes
+        if "Temps_total" in df.columns:
+            df["Temps_total"] = (
+                pd.to_numeric(df["Temps_total"], errors="coerce")
+                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
+                  .astype(int)
+            )
+        for col in ["Calories", "Proteines"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
-        return
+        dataframes[file_name.replace(".csv", "")] = df
+        print(f"DEBUG: Clé '{file_name.replace('.csv', '')}' ajoutée à dataframes. Contenu de dataframes: {dataframes.keys()}")
+        st.sidebar.success(f"{file_name} chargé.")
+    except Exception as e:
+        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}")
+        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
+        st.stop()
+
 
     # Vérification des colonnes essentielles après le chargement
+# Vérification des colonnes essentielles après le chargement
+    # Vérification des colonnes essentielles après le chargement
     try:
+        # ----- DÉBUT DES LIGNES À AJOUTER POUR LE DÉBOGAGE -----
+        st.write("--- Débogage des DataFrames ---")
+        if "Planning" in dataframes:
+            st.write(f"Type de dataframes['Planning'] : {type(dataframes['Planning'])}")
+            if isinstance(dataframes["Planning"], pd.DataFrame):
+                st.write(f"dataframes['Planning'] est vide : {dataframes['Planning'].empty}")
+                st.write(f"Colonnes de dataframes['Planning'] : {dataframes['Planning'].columns.tolist()}")
+            else:
+                st.write("dataframes['Planning'] n'est pas un DataFrame.")
+        else:
+            st.write("Clé 'Planning' manquante dans le dictionnaire dataframes.")
+        st.write("--- Fin du débogage ---")
+        # ----- FIN DES LIGNES À AJOUTER POUR LE DÉBOGAGE -----
+
         verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
@@ -763,7 +839,6 @@ def main():
 
     except ValueError:
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
-        return
 
     st.markdown("---")
     st.header("1. Générer le Menu")
