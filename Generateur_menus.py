@@ -709,47 +709,10 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
-# --- Chargement des CSV via UN SEUL widget ---
-file_names = [
-    "Recettes.csv",
-    "Planning.csv",
-    "Menus.csv",
-    "Ingredients.csv",
-    "Ingredients_recettes.csv",
-]
-
-uploaded_files = st.sidebar.file_uploader(
-    "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
-    type="csv",
-    accept_multiple_files=True,
-    key="multi_csv_upload",
-)
-
-# Aucune sélection → on arrête proprement
-if not uploaded_files:
-    st.info("Chargez les cinq fichiers pour continuer.")
-    st.stop()
-
-# Dictionnaire {nom_fichier: objet_uploaded}
-file_dict = {f.name: f for f in uploaded_files}
-
-# Vérifier que les 5 noms attendus sont présents
-missing = [fn for fn in file_names if fn not in file_dict]
-if missing:
-    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
-    st.stop()
-
-# Lecture des fichiers dans le dict `dataframes`
-dataframes = {}
-for fn in file_names:
-    buffer = io.StringIO(file_dict[fn].getvalue().decode("utf-8"))
-    if fn == "Planning.csv":
-        df = pd.read_csv(buffer, sep=";", parse_dates=["Date"], dayfirst=True)
-    else:
-        df = pd.read_csv(buffer, sep=";")
-    dataframes[fn.replace(".csv", "")] = df
-    st.sidebar.success(f"{fn} chargé.")
-
+    uploaded_files = {}
+    file_names = ["Recettes.csv", "Planning.csv", "Menus.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
+    for file_name in file_names:
+        uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
 
     dataframes = {}
     all_files_uploaded = True
@@ -792,7 +755,7 @@ for fn in file_names:
 
     if not all_files_uploaded:
         st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
-        st.stop
+        return
 
     # Vérification des colonnes essentielles après le chargement
     try:
