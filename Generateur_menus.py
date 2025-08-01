@@ -813,7 +813,8 @@ except Exception as e:
 
     except ValueError:
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
-        return
+        st.stop()          # ← remplace ‘return’
+
 
     st.markdown("---")
     st.header("1. Générer le Menu")
