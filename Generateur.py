@@ -68,7 +68,7 @@ def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key)
                 uid = prop_data.get("unique_id", {}); p, n = uid.get("prefix"), uid.get("number")
                 return f"{p}-{n}" if p and n is not None else (str(n) if n is not None else "")
             elif prop_type == "title": return get_property_value(prop_data, notion_prop_name_for_log, "title")
-            elif prop_type == "rich_text_plain": return get_property_value(prop_data, notion_prop_name_for_log, "rich_text_plain")
+            elif expected_format_key == "rich_text_plain": return get_property_value(prop_data, notion_prop_name_for_log, "rich_text_plain")
             return ""
         elif expected_format_key == "rich_text_plain":
             return "".join(t.get("plain_text", "") for t in prop_data.get("rich_text", []))
@@ -321,7 +321,7 @@ st.info("Assurez-vous que les bases de données Notion sont accessibles et conti
 
 
 st.header("2. Extraction des Données de Notion vers CSV/ZIP")
-st.markdown("Cliquez sur le bouton ci-dessous pour extraire toutes les données de vos bases Notion (Recettes, Ingrédients, Ingrédients_recettes) et les télécharger dans un fichier ZIP.")
+st.markdown("Cliquez sur le bouton ci-dessous pour extraire toutes les données de vos bases Notion (Recettes, Ingrédients, Ingrédients_recettes et Menus) et les télécharger dans un fichier ZIP.")
 
 if st.button("Extraire et Télécharger Toutes les Données de Notion"):
     csv_data_dict = {}
@@ -353,6 +353,15 @@ if st.button("Extraire et Télécharger Toutes les Données de Notion"):
         else:
             st.error(f"L'extraction des liens ingrédients-recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV}.")
             extraction_successful = False
+            
+    with st.spinner("Extraction des menus existants depuis Notion..."):
+        df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
+        if df_menus_extracted is not None and not df_menus_extracted.empty:
+            csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_extracted.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Menus existants extraits : {len(df_menus_extracted)} lignes.")
+        else:
+            st.error(f"L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_MENUS_CSV}.")
+            extraction_successful = False
 
     if extraction_successful and csv_data_dict:
         zip_buffer = io.BytesIO()
@@ -375,28 +384,6 @@ if st.button("Extraire et Télécharger Toutes les Données de Notion"):
 st.header("3. Génération de Nouveaux Menus (Fonctionnalité à venir)")
 st.markdown("Cette section contiendra les outils pour générer de nouveaux menus basés sur vos critères et les données de vos bases Notion.")
 st.warning("Cette fonctionnalité n'est pas encore implémentée dans cette version du code.")
-
-
-st.header("4. Extraire les Menus existants depuis Notion")
-st.markdown("Cette section vous permet de télécharger un fichier CSV contenant les menus actuellement enregistrés dans votre base de données Notion.")
-
-if st.button("Extraire et Télécharger les Menus de Notion"):
-    with st.spinner("Extraction en cours depuis Notion..."):
-        df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
-        if df_menus_extracted is not None and not df_menus_extracted.empty:
-            csv_buffer = io.StringIO()
-            df_menus_extracted.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
-            csv_bytes = csv_buffer.getvalue().encode("utf-8-sig")
-
-            st.download_button(
-                label="Télécharger Menus_extraits_Notion.csv",
-                data=csv_bytes,
-                file_name=FICHIER_EXPORT_MENUS_CSV, # Utiliser le nom de fichier correct ici
-                mime="text/csv",
-            )
-            st.success("Fichier d'extraction Notion prêt au téléchargement.")
-        else:
-            st.error("L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée.")
 
 
 st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
