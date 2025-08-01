@@ -714,6 +714,7 @@ def main():
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
 # --- Chargement des fichiers CSV en un seul clic ---
+# ---------------- Chargement et vérifications des CSV ----------------
 uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
     type="csv",
@@ -721,12 +722,12 @@ uploaded_files = st.sidebar.file_uploader(
     key="multi_csv_upload"
 )
 
-# 🌟 Protection n°1 – rien n’est encore chargé
-if uploaded_files is None or len(uploaded_files) == 0:
+# 1️⃣ A-t-on au moins un fichier sélectionné ?
+if not uploaded_files:
     st.info("Chargez les cinq fichiers pour commencer.")
     st.stop()
 
-
+# Liste exacte attendue
 file_names = [
     "Recettes.csv",
     "Planning.csv",
@@ -735,8 +736,37 @@ file_names = [
     "Ingredients_recettes.csv"
 ]
 
-# --- Lecture & pré-traitement --------------------------------
+# 2️⃣ Toutes les clés sont-elles présentes ?
+file_dict = {f.name: f for f in uploaded_files}
+missing = [fn for fn in file_names if fn not in file_dict]
+if missing:
+    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
+    st.stop()
+
+# 3️⃣ Lecture de chaque CSV dans le dictionnaire « dataframes »
 dataframes = {}
+for file_name in file_names:
+    file_buffer = io.StringIO(file_dict[file_name].getvalue().decode("utf-8"))
+    if file_name == "Planning.csv":
+        df = pd.read_csv(file_buffer, sep=";", parse_dates=["Date"], dayfirst=True)
+    else:
+        df = pd.read_csv(file_buffer, sep=";")
+    dataframes[file_name.replace(".csv", "")] = df
+    st.sidebar.success(f"{file_name} chargé.")
+
+# 4️⃣ La clé « Planning » doit exister avant de l’utiliser
+if "Planning" not in dataframes:
+    st.error("Le fichier Planning.csv n’a pas été chargé ou son nom est incorrect.")
+    st.stop()
+
+# 5️⃣ Vérifie les colonnes obligatoires
+verifier_colonnes(
+    dataframes["Planning"],
+    ["Date", "Participants", "Transportable", "Temps", "Nutrition"],
+    "Planning.csv"
+)
+# ---------------------------------------------------------------------
+
 
 for file_name in file_names:          # ⇦ 1. Boucle de lecture
     file = file_dict[file_name]
