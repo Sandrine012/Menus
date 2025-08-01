@@ -280,8 +280,8 @@ def get_notion_recipes_data():
                 {"property": "Type_plat", "multi_select": {"contains": "Soupe"}},
                 {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
             ]
-        ]
-    }
+        }
+    ]
     filter_recettes_api = {"and": filter_conditions_recipes}
 
     recipes_pages = fetch_data_from_notion(DATABASE_ID_RECETTES, NUM_ROWS_TO_EXTRACT, filter_recettes_api)
