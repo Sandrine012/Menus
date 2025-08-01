@@ -757,6 +757,11 @@ for file_name in file_names:
                 parse_dates=["Date"],
                 dayfirst=True
             )
+            # ----- AJOUTEZ CES LIGNES POUR DÉBOGAGE SUPPLÉMENTAIRE -----
+            print(f"DEBUG: Après pd.read_csv pour Planning.csv. Type de df: {type(df)}")
+            if isinstance(df, pd.DataFrame):
+                print(f"DEBUG: Planning.csv - df.empty: {df.empty}, df.columns: {df.columns.tolist()}")
+            # -------------------------------------------------------------
         else:
             df = pd.read_csv(file, encoding="utf-8", sep=",")
 
@@ -764,10 +769,12 @@ for file_name in file_names:
         # ... (votre code de normalisation) ...
 
         dataframes[file_name.replace(".csv", "")] = df
+        # ----- AJOUTEZ CETTE LIGNE POUR DÉBOGAGE SUPPLÉMENTAIRE -----
+        print(f"DEBUG: Clé '{file_name.replace('.csv', '')}' ajoutée à dataframes. Contenu de dataframes: {dataframes.keys()}")
+        # -------------------------------------------------------------
         st.sidebar.success(f"{file_name} chargé.")
     except Exception as e:
-        # AJOUTEZ CETTE LIGNE POUR AFFICHER L'ERREUR DANS LA CONSOLE
-        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}")
+        print(f"DEBUG_ERROR_LOADING_{file_name}: {e}") # Cette ligne est déjà là normalement
         st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
         st.stop()
 
