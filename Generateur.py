@@ -280,8 +280,8 @@ def get_notion_recipes_data():
                 {"property": "Type_plat", "multi_select": {"contains": "Soupe"}},
                 {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
             ]
-        }
-    ]
+        ]
+    }
     filter_recettes_api = {"and": filter_conditions_recipes}
 
     recipes_pages = fetch_data_from_notion(DATABASE_ID_RECETTES, NUM_ROWS_TO_EXTRACT, filter_recettes_api)
@@ -379,11 +379,6 @@ if st.button("Extraire et Télécharger Toutes les Données de Notion"):
         st.success("Tous les fichiers CSV sont prêts au téléchargement dans un fichier ZIP.")
     else:
         st.error("L'extraction des données depuis Notion a échoué pour un ou plusieurs fichiers, ou aucune donnée n'a été retournée.")
-
-
-st.header("3. Génération de Nouveaux Menus (Fonctionnalité à venir)")
-st.markdown("Cette section contiendra les outils pour générer de nouveaux menus basés sur vos critères et les données de vos bases Notion.")
-st.warning("Cette fonctionnalité n'est pas encore implémentée dans cette version du code.")
 
 
 st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
