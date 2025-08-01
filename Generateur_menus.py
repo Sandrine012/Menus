@@ -780,7 +780,23 @@ for file_name in file_names:
 
 
     # Vérification des colonnes essentielles après le chargement
+# Vérification des colonnes essentielles après le chargement
+    # Vérification des colonnes essentielles après le chargement
     try:
+        # ----- DÉBUT DES LIGNES À AJOUTER POUR LE DÉBOGAGE -----
+        st.write("--- Débogage des DataFrames ---")
+        if "Planning" in dataframes:
+            st.write(f"Type de dataframes['Planning'] : {type(dataframes['Planning'])}")
+            if isinstance(dataframes["Planning"], pd.DataFrame):
+                st.write(f"dataframes['Planning'] est vide : {dataframes['Planning'].empty}")
+                st.write(f"Colonnes de dataframes['Planning'] : {dataframes['Planning'].columns.tolist()}")
+            else:
+                st.write("dataframes['Planning'] n'est pas un DataFrame.")
+        else:
+            st.write("Clé 'Planning' manquante dans le dictionnaire dataframes.")
+        st.write("--- Fin du débogage ---")
+        # ----- FIN DES LIGNES À AJOUTER POUR LE DÉBOGAGE -----
+
         verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
