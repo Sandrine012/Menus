@@ -710,11 +710,12 @@ def main():
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
 # --- Chargement des fichiers CSV en un seul clic ---
+# --- Chargement des fichiers CSV en un seul clic ---
 uploaded_files = st.sidebar.file_uploader(
     "Sélectionnez simultanément les 5 fichiers CSV (Ctrl/Cmd-clic)",
     type="csv",
     accept_multiple_files=True,
-    key="multi_csv_upload"      # ← parenthèse fermante juste après
+    key="multi_csv_upload"
 )
 
 file_names = [
@@ -723,13 +724,54 @@ file_names = [
     "Menus.csv",
     "Ingredients.csv",
     "Ingredients_recettes.csv"
-]                               # ← parenthèse fermante de la liste
+]  # ← ce ] manquait dans ton code
 
+dataframes = {}
 
-# 1️⃣ Vérifier que les 5 fichiers attendus sont présents
+# 1️⃣ Vérifier la présence des 5 fichiers
 if uploaded_files is None or len(uploaded_files) < 5:
     st.warning("Veuillez sélectionner les 5 fichiers CSV requis pour continuer.")
     st.stop()
+
+file_dict = {f.name: f for f in uploaded_files}
+missing = [fn for fn in file_names if fn not in file_dict]
+if missing:
+    st.error(f"Fichier(s) manquant(s) : {', '.join(missing)}")
+    st.stop()
+
+# 2️⃣ Lecture & pré-traitement
+for file_name in file_names:
+    file = file_dict[file_name]
+    try:
+        if file_name == "Planning.csv":
+            file.seek(0)
+            df = pd.read_csv(
+                file,
+                encoding="utf-8",
+                sep=";",          # séparateur français
+                parse_dates=["Date"],
+                dayfirst=True
+            )  # ← cette ) manquait aussi
+        else:
+            df = pd.read_csv(file, encoding="utf-8")
+
+        # Normalisations communes
+        if "Temps_total" in df.columns:
+            df["Temps_total"] = (
+                pd.to_numeric(df["Temps_total"], errors="coerce")
+                  .fillna(VALEUR_DEFAUT_TEMPS_PREPARATION)
+                  .astype(int)
+            )
+        for col in ["Calories", "Proteines"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        dataframes[file_name.replace(".csv", "")] = df
+        st.sidebar.success(f"{file_name} chargé.")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de {file_name} : {e}")
+        st.stop()
+
 
 file_dict = {f.name: f for f in uploaded_files}
 missing = [fn for fn in file_names if fn not in file_dict]
