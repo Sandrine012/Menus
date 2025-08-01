@@ -2,56 +2,46 @@ import streamlit as st
 import pandas as pd
 import io
 
-# ───────────────────────────────────────────────
-# 1. OUTILS GÉNÉRIQUES
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# 1. Utilitaire : convertir un DataFrame en CSV
+# ─────────────────────────────────────────────
 def _csv_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.StringIO()
-    df.to_csv(buf, index=False, encoding="utf-8-sig")
-    return buf.getvalue().encode("utf-8-sig")
+    """
+    Renvoie le contenu CSV (UTF-8 avec BOM) d’un DataFrame,
+    prêt à être utilisé dans st.download_button().
+    """
+    buff = io.StringIO()
+    df.to_csv(buff, index=False, encoding="utf-8-sig")
+    return buff.getvalue().encode("utf-8-sig")
 
 
-# ───────────────────────────────────────────────
-# 2. CHARGER TOUTES LES DONNÉES NOTION ⇢ session_state
-#    (appelé par le bouton « ⚙️ Charger les données »)
-# ───────────────────────────────────────────────
-def charger_donnees():
-    # ⬇️  tes fonctions existantes : NE CHANGE RIEN
-    st.session_state["df_ingredients"]              = get_ingredients_data()
-    st.session_state["df_ingredients_recettes"]     = get_ingredients_recettes_data()
-    st.session_state["df_recettes"]                 = get_recettes_data()
-
-    # exemple : si tu as déjà un « df_menus_complet » quand tu génères
-    # les menus, on ne le connaît pas encore ici. On prépare juste un
-    # DataFrame vide : il sera rempli plus tard.
-    st.session_state.setdefault("df_menus_gen", pd.DataFrame())
-
-    st.success("✅ Données Notion chargées.")
-
-
-# ───────────────────────────────────────────────
-# 3. BLOC TÉLÉCHARGEMENT : 1 clic ⇒ 4 liens CSV
-# ───────────────────────────────────────────────
-def bloc_export():
+# ─────────────────────────────────────────────
+# 2. Bloc Export : 1 clic ➜ 4 liens CSV
+# ─────────────────────────────────────────────
+def bloc_export() -> None:
+    """Affiche le bouton ‘💾 Préparer les fichiers’ puis les 4 liens CSV."""
     st.subheader("📥 Export CSV (4 fichiers)")
 
+    # Les quatre DataFrame attendus dans st.session_state
     keys = [
-        "df_menus_gen",
-        "df_ingredients",
-        "df_ingredients_recettes",
-        "df_recettes",
+        "df_menus_gen",               # DataFrame des menus générés
+        "df_ingredients",             # Ingrédients en stock
+        "df_ingredients_recettes",    # Ingrédients par recette
+        "df_recettes",                # Recettes
     ]
 
-    # Vérifie que tout est bien là
+    # Vérifie que chaque DataFrame existe et contient des lignes
     if not all(
-        k in st.session_state and isinstance(st.session_state[k], pd.DataFrame)
+        k in st.session_state
+        and isinstance(st.session_state[k], pd.DataFrame)
         and not st.session_state[k].empty
         for k in keys
     ):
-        st.info("Les données ne sont pas encore prêtes – clique d’abord sur « ⚙️ Charger les données ».")
+        st.info("Les 4 DataFrame ne sont pas encore prêts.")
         return
 
-    if st.button("💾 Préparer les 4 fichiers CSV"):
+    # Un seul bouton pour préparer les 4 liens
+    if st.button("💾 Préparer les fichiers à télécharger"):
         fichiers = {
             "Menus_generes.csv":        _csv_bytes(st.session_state["df_menus_gen"]),
             "Ingredients.csv":          _csv_bytes(st.session_state["df_ingredients"]),
@@ -59,32 +49,48 @@ def bloc_export():
             "Recettes.csv":             _csv_bytes(st.session_state["df_recettes"]),
         }
 
+        # Génère un lien de téléchargement par fichier
         for nom, contenu in fichiers.items():
             st.download_button(
-                label=f"Télécharger : {nom}",
+                label=f"Télécharger {nom}",
                 data=contenu,
                 file_name=nom,
                 mime="text/csv",
-                key=nom,
+                key=nom,            # clé unique par bouton
             )
         st.success("Fichiers prêts ! Clique sur chaque lien pour les récupérer.")
 
 
-# ───────────────────────────────────────────────
-# 4. INTÉGRATION MINIMALE DANS **TON** main()
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# 3. Intégration dans ton main() existant
+# ─────────────────────────────────────────────
 def main():
     st.title("🍽️ Générateur de Menus Notion")
 
-    # --- Bouton qui charge une bonne fois pour toutes les 3 bases Notion ---
-    if st.button("⚙️ Charger les données"):
-        with st.spinner("Connexion à Notion…"):
-            charger_donnees()
+    # ─── Ton pipeline habituel : chargement Notion, compteurs, etc. ───
+    # Exemple (déjà présent dans ton code) :
+    #
+    # df_recettes = get_recettes_data()
+    # st.session_state["df_recettes"] = df_recettes
+    #
+    # df_ingredients = get_ingredients_data()
+    # st.session_state["df_ingredients"] = df_ingredients
+    #
+    # df_ing_recettes = get_ingredients_recettes_data()
+    # st.session_state["df_ingredients_recettes"] = df_ing_recettes
+    #
+    # df_menus_complet = construire_menus(df_recettes)  # ta logique
+    # st.session_state["df_menus_gen"] = df_menus_complet[["Date", "Participant(s)", "Nom"]]
+    #
+    # st.write(f"Recettes : {len(df_recettes)} lignes")  # tes compteurs
+    # st.write(f"Ingrédients : {len(df_ingredients)} lignes")
+    # ...
 
-    # --- Bloc export (apparaît seulement si les DataFrames sont présents) ---
+    # ─── Nouveau bloc export ──────────────────────────────────────────
     bloc_export()
 
-    # … le reste **inchangé** de ton appli …
+    # ─── Reste de l’app (inchangé) ───────────────────────────────────
+    # ...
 
 
 if __name__ == "__main__":
