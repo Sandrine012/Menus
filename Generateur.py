@@ -261,9 +261,12 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
     
     # --- Conversion de la colonne 'Date' pour données extraites de Notion ---
     if 'Date' in df.columns:
+        # Tenter la conversion en datetime, forçant les erreurs à NaT
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        # Formater la date en YYYY-MM-DD string après conversion pour l'uniformité
-        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+        
+        # Formater la date en YYYY-MM-DD string. Les NaT deviendront NaN après strftime.
+        # Ensuite, remplacer les NaN par des chaînes vides pour la sortie CSV.
+        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d').fillna('')
     # --- FIN AJOUT ---
 
     return df
