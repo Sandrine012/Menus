@@ -68,7 +68,7 @@ def get_property_value(prop_data, notion_prop_name_for_log, expected_format_key)
                 uid = prop_data.get("unique_id", {}); p, n = uid.get("prefix"), uid.get("number")
                 return f"{p}-{n}" if p and n is not None else (str(n) if n is not None else "")
             elif prop_type == "title": return get_property_value(prop_data, notion_prop_name_for_log, "title")
-            elif prop_type == "rich_text_plain": return get_property_value(prop_data, notion_prop_name_for_log, "rich_text_plain")
+            elif expected_format_key == "rich_text_plain": return get_property_value(prop_data, notion_prop_name_for_log, "rich_text_plain")
             return ""
         elif expected_format_key == "rich_text_plain":
             return "".join(t.get("plain_text", "") for t in prop_data.get("rich_text", []))
@@ -352,6 +352,15 @@ if st.button("Extraire et Télécharger Toutes les Données de Notion"):
             st.success(f"Liens ingrédients-recettes extraits : {len(df_ing_rec_extracted)} lignes.")
         else:
             st.error(f"L'extraction des liens ingrédients-recettes a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_INGREDIENTS_RECETTES_CSV}.")
+            extraction_successful = False
+            
+    with st.spinner("Extraction des menus existants depuis Notion..."):
+        df_menus_extracted = get_existing_menus_data() # Appelle la fonction qui retourne déjà les données
+        if df_menus_extracted is not None and not df_menus_extracted.empty:
+            csv_data_dict[FICHIER_EXPORT_MENUS_CSV] = df_menus_extracted.to_csv(index=False, encoding="utf-8-sig")
+            st.success(f"Menus existants extraits : {len(df_menus_extracted)} lignes.")
+        else:
+            st.error(f"L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée pour {FICHIER_EXPORT_MENUS_CSV}.")
             extraction_successful = False
 
     if extraction_successful and csv_data_dict:
