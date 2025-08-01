@@ -200,9 +200,8 @@ mapping_recipes = {
 }
 header_recipes = list(mapping_recipes.keys())
 
-# Pour Menus.csv
+# Pour Menus.csv (Page_ID retiré pour la sortie CSV)
 mapping_menus = {
-    "Page_ID": (None, "page_id_special"), # Ajout de Page_ID pour cohérence si besoin
     "Nom Menu": ("Nom Menu", "title"),
     "Recette": ("Recette", "relation_id_or_empty"), # Récupère l'ID de la recette liée
     "Date": ("Date", "date_start_or_empty")
@@ -235,7 +234,11 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
         row_data = {}
         page_props_raw = page.get("properties", {})
         for csv_col_name, (notion_prop_name_key, expected_format_key) in mapping.items():
-            if csv_col_name == "Page_ID":
+            # NOTE: Page_ID n'est pas inclus dans le mapping_menus final pour éviter son exportation
+            # Si 'page_id_special' était nécessaire en interne pour d'autres traitements,
+            # il faudrait l'ajouter ici temporairement puis le supprimer avant de retourner le df.
+            # Mais pour l'export CSV strict, on le retire du mapping.
+            if csv_col_name == "Page_ID": # Garder ce bloc si Page_ID doit être traité différemment ou si le mapping_menus était plus large
                 row_data[csv_col_name] = page.get("id", "")
             else:
                 raw_prop_data = page_props_raw.get(notion_prop_name_key)
@@ -260,9 +263,11 @@ def process_notion_pages_to_dataframe(pages, mapping, default_header):
 
     df = df[final_cols] # Ensure column order
     
-    # --- AJOUT POUR LA CONVERSION DE DATE (pour données extraites de Notion) ---
+    # --- Conversion de la colonne 'Date' pour données extraites de Notion ---
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        # Formater la date en YYYY-MM-DD string après conversion pour l'uniformité
+        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
     # --- FIN AJOUT ---
 
     return df
@@ -279,7 +284,10 @@ def get_notion_recipes_data():
                 *([{"property": "Saison", "multi_select": {"contains": SAISON_FILTRE}}] if SAISON_FILTRE else []),
                 {"property": "Saison", "multi_select": {"is_empty": True}}
             ]
-        },
+        }
+    ]
+    # Ajout du filtre sur Type_plat
+    filter_conditions_recipes.append(
         {
             "or": [
                 {"property": "Type_plat", "multi_select": {"contains": "Salade"}},
@@ -287,7 +295,7 @@ def get_notion_recipes_data():
                 {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
             ]
         }
-    ]
+    )
     filter_recettes_api = {"and": filter_conditions_recipes}
 
     recipes_pages = fetch_data_from_notion(DATABASE_ID_RECETTES, NUM_ROWS_TO_EXTRACT, filter_recettes_api)
@@ -318,15 +326,12 @@ def get_existing_menus_data():
     return df_menus
 
 # --- Initialisation de session_state pour stocker les DataFrames ---
-if 'df_menus_local' not in st.session_state:
-    st.session_state.df_menus_local = pd.DataFrame()
 if 'df_recipes_extracted' not in st.session_state:
     st.session_state.df_recipes_extracted = pd.DataFrame()
 if 'df_ingredients_extracted' not in st.session_state:
     st.session_state.df_ingredients_extracted = pd.DataFrame()
 if 'df_ing_rec_extracted' not in st.session_state:
     st.session_state.df_ing_rec_extracted = pd.DataFrame()
-# Ajoutez d'autres DataFrames si nécessaire pour la génération future
 
 
 # --- Section Streamlit ---
@@ -403,7 +408,7 @@ st.header("3. Génération de Nouveaux Menus (Fonctionnalité à venir)")
 st.markdown("Cette section contiendra les outils pour générer de nouveaux menus basés sur vos critères et les données de vos bases Notion.")
 st.warning("Cette fonctionnalité n'est pas encore implémentée dans cette version du code.")
 
-# --- Nouvelle section pour charger un fichier Menus CSV localement ---
+# --- Nouvelle section pour extraire et télécharger les menus existants de Notion ---
 st.header("4. Extraire les Menus existants depuis Notion")
 st.markdown("Cette section vous permet de télécharger un fichier CSV contenant les menus actuellement enregistrés dans votre base de données Notion.")
 
@@ -424,38 +429,6 @@ if st.button("Extraire et Télécharger les Menus de Notion", key="extract_downl
             st.success("Fichier d'extraction Notion prêt au téléchargement.")
         else:
             st.error("L'extraction des menus existants depuis Notion a échoué ou n'a retourné aucune donnée.")
-
-st.header("5. Charger un fichier Menus CSV pour la génération")
-st.markdown("Chargez ici un fichier CSV de menus (par exemple, un fichier exporté précédemment ou un `Menus.csv` que vous avez préparé) pour être utilisé dans la génération ou l'analyse.")
-
-uploaded_file = st.file_uploader("Choisissez un fichier CSV de Menus", type=["csv"])
-
-if uploaded_file is not None:
-    try:
-        df_uploaded_menus = pd.read_csv(uploaded_file)
-        
-        # --- Conversion de la colonne 'Date' pour le fichier local ---
-        if 'Date' in df_uploaded_menus.columns:
-            df_uploaded_menus['Date'] = pd.to_datetime(df_uploaded_menus['Date'], errors='coerce')
-            st.success("La colonne 'Date' du fichier CSV chargé a été convertie en format date/heure.")
-        else:
-            st.warning("La colonne 'Date' n'a pas été trouvée dans le fichier CSV chargé. Veuillez vérifier le nom de la colonne.")
-
-        st.session_state.df_menus_local = df_uploaded_menus
-        st.success(f"Fichier '{uploaded_file.name}' chargé avec succès. {len(df_uploaded_menus)} lignes détectées.")
-        
-        st.subheader("Aperçu des menus chargés :")
-        st.dataframe(df_uploaded_menus.head())
-
-        # Exemple d'utilisation de .dt pour vérifier (peut être supprimé en production)
-        if 'Date' in df_uploaded_menus.columns and pd.api.types.is_datetime64_any_dtype(df_uploaded_menus['Date']):
-            st.info(f"Année de la première date chargée : {df_uploaded_menus['Date'].min().year}")
-        else:
-            st.warning("La colonne 'Date' n'est pas au format datetime après le chargement, vérifiez le format de vos données ou le nom de la colonne.")
-
-    except Exception as e:
-        st.error(f"Une erreur est survenue lors du chargement ou du traitement du fichier CSV : {e}")
-        st.info("Veuillez vous assurer que le fichier est un CSV valide et que la colonne 'Date' (si présente) a un format reconnaissable.")
 
 st.info("N'oubliez pas de configurer vos secrets Notion dans Streamlit Cloud.")
 
