@@ -792,7 +792,7 @@ for fn in file_names:
 
     if not all_files_uploaded:
         st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
-        return
+        st.stop
 
     # Vérification des colonnes essentielles après le chargement
     try:
