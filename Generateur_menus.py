@@ -38,14 +38,10 @@ class RecetteManager:
             self.df_recettes = self.df_recettes.set_index(COLONNE_ID_RECETTE, drop=False)
 
         self.df_ingredients_initial = df_ingredients.copy()
-        if COLONNE_ID_INGREDIENT in self.df_ingredients_initial.columns and not self.df_ingredients_initial.index.name == COLONNE_ID_INGREDIENT:
-            self.df_ingredients_initial = self.df_ingredients_initial.set_index(COLONNE_ID_INGREDIENT, drop=False)
-
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
 
         self.stock_simule = self.df_ingredients_initial.copy()
         if "Qte reste" in self.stock_simule.columns:
-            # Ensure "Qte reste" is numeric and fill NaNs
             self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
         else:
             logger.error("'Qte reste' manquante dans df_ingredients pour stock_simule.")
@@ -74,7 +70,6 @@ class RecetteManager:
 
         for _, row in self.stock_simule.iterrows():
             try:
-                # Ensure correct type conversion for individual values
                 qte = float(str(row["Qte reste"]).replace(",", "."))
                 unite = str(row["unité"]).lower()
                 page_id = str(row[COLONNE_ID_INGREDIENT])
@@ -132,8 +127,7 @@ class RecetteManager:
             qte_en_stock = 0.0
             if not ing_stock_df.empty:
                 try:
-                    # Use .item() to safely extract a scalar from a Series
-                    qte_en_stock = ing_stock_df["Qte reste"].iloc[0].item()
+                    qte_en_stock = float(ing_stock_df["Qte reste"].iloc[0])
                 except (ValueError, IndexError, KeyError) as e:
                     logger.error(f"Erreur lecture stock pour {ing_id_str} rec {recette_id_str}: {e}")
             else:
@@ -170,8 +164,7 @@ class RecetteManager:
             idx = idx_list[0]
 
             try:
-                # Use .item() to safely extract a scalar from a Series
-                qte_actuelle = self.stock_simule.loc[idx, "Qte reste"].item()
+                qte_actuelle = float(self.stock_simule.loc[idx, "Qte reste"])
                 if qte_actuelle > 0 and qte_necessaire > 0:
                     qte_a_consommer = min(qte_actuelle, qte_necessaire)
                     nouvelle_qte = qte_actuelle - qte_a_consommer
@@ -203,10 +196,7 @@ class RecetteManager:
     def obtenir_nom_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            if self.df_ingredients_initial.index.name == COLONNE_ID_INGREDIENT:
-                nom = self.df_ingredients_initial.loc[ing_page_id_str, 'Nom']
-            else:
-                nom = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
+            nom = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
             return nom
         except (IndexError, KeyError):
             logger.warning(f"Nom introuvable pour ingrédient ID: {ing_page_id_str} dans df_ingredients_initial.")
@@ -539,7 +529,9 @@ class MenuGenerator:
                 date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
             nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
             logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
 
@@ -717,39 +709,53 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
-    dataframes = {}
-    all_files_uploaded = True
+    # Individual uploaders for the constant files
+    uploaded_files = {}
+    
+    file_names_individual = ["Recettes.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
+    for file_name in file_names_individual:
+        uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
 
-    # 1. Uploader for Recettes.csv
-    uploaded_recettes = st.sidebar.file_uploader("Uploader Recettes.csv", type="csv", key="recettes_uploader")
-    if uploaded_recettes is not None:
-        try:
-            df = pd.read_csv(uploaded_recettes, encoding='utf-8')
-            if "Temps_total" in df.columns:
-                df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-            if "Calories" in df.columns:
-                df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
-            if "Proteines" in df.columns:
-                df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
-            dataframes["Recettes"] = df
-            st.sidebar.success("Recettes.csv chargé avec succès.")
-        except Exception as e:
-            st.sidebar.error(f"Erreur lors du chargement de Recettes.csv: {e}")
-            all_files_uploaded = False
-    else:
-        all_files_uploaded = False
-
-    # 2. Uploader for Planning.csv and Menus.csv
+    # Combined uploader for Planning.csv and Menus.csv
     uploaded_planning_menus = st.sidebar.file_uploader(
-        "Uploader Planning.csv et Menus.csv",
+        "Uploader Planning.csv et Menus.csv (sélectionnez les deux)",
         type="csv",
         accept_multiple_files=True,
         key="planning_menus_uploader"
     )
 
-    found_planning = False
-    found_menus = False
+    dataframes = {}
+    all_files_uploaded = True
+
+    # Process individual uploads first
+    for file_name, uploaded_file in uploaded_files.items():
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file, encoding='utf-8')
+                # ... (rest of your existing type conversions for Recettes, Ingredients, Ingredients_recettes)
+                if "Temps_total" in df.columns:
+                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+                if "Calories" in df.columns:
+                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
+                if "Proteines" in df.columns:
+                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+
+                dataframes[file_name.replace(".csv", "")] = df
+                st.sidebar.success(f"{file_name} chargé avec succès.")
+            except Exception as e:
+                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
+                all_files_uploaded = False
+                break
+        else:
+            all_files_uploaded = False
+            # Don't break here, allow the combined uploader to be checked
+            # if this file is not essential for initial check
+            pass # Keep looping to check other individual files
+
+    # Process combined Planning and Menus uploads
     if uploaded_planning_menus:
+        found_planning = False
+        found_menus = False
         for uploaded_file in uploaded_planning_menus:
             file_name = uploaded_file.name
             try:
@@ -781,48 +787,6 @@ def main():
             all_files_uploaded = False
     else:
         st.sidebar.warning("Veuillez uploader Planning.csv et Menus.csv.")
-        all_files_uploaded = False
-
-    # 3. New combined uploader for Ingredients.csv and Ingredients_recettes.csv
-    uploaded_ingredients_combined = st.sidebar.file_uploader(
-        "Uploader Ingrédients.csv et Ingrédients_recettes.csv",
-        type="csv",
-        accept_multiple_files=True,
-        key="ingredients_combined_uploader"
-    )
-    
-    found_ingredients = False
-    found_ingredients_recettes = False
-    if uploaded_ingredients_combined:
-        for uploaded_file in uploaded_ingredients_combined:
-            file_name = uploaded_file.name
-            try:
-                if "Ingredients.csv" in file_name:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                    if "Qte reste" in df.columns:
-                        df["Qte reste"] = pd.to_numeric(df["Qte reste"], errors='coerce').fillna(0)
-                    dataframes["Ingredients"] = df
-                    st.sidebar.success("Ingredients.csv chargé avec succès.")
-                    found_ingredients = True
-                elif "Ingredients_recettes.csv" in file_name:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                    if "Qté/pers_s" in df.columns:
-                        df["Qté/pers_s"] = df["Qté/pers_s"].astype(str).str.replace(',', '.', regex=False)
-                    dataframes["Ingredients_recettes"] = df
-                    st.sidebar.success("Ingredients_recettes.csv chargé avec succès.")
-                    found_ingredients_recettes = True
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                all_files_uploaded = False
-        
-        if not found_ingredients:
-            st.sidebar.warning("Ingredients.csv n'a pas été trouvé parmi les fichiers sélectionnés.")
-            all_files_uploaded = False
-        if not found_ingredients_recettes:
-            st.sidebar.warning("Ingredients_recettes.csv n'a pas été trouvé parmi les fichiers sélectionnés.")
-            all_files_uploaded = False
-    else:
-        st.sidebar.warning("Veuillez uploader Ingrédients.csv et Ingrédients_recettes.csv.")
         all_files_uploaded = False
 
 
