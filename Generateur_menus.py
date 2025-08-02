@@ -194,7 +194,7 @@ def main():
                 tout_ok = False
         # Vérifier présence des deux fichiers
         if "Recettes" not in dfs or "Ingredients_recettes" not in dfs:
-            st.sidebar.warning("Il manque Recettes.csv ou Ingredients_recettes.csv.")
+            st.sidebar.warning("Il manque Recettes.csv ou Ingredients_recettes.csv")
             tout_ok = False
     else:
         tout_ok = False
