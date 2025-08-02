@@ -45,6 +45,7 @@ class RecetteManager:
 
         self.stock_simule = self.df_ingredients_initial.copy()
         if "Qte reste" in self.stock_simule.columns:
+            # Ensure "Qte reste" is numeric and fill NaNs
             self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
         else:
             logger.error("'Qte reste' manquante dans df_ingredients pour stock_simule.")
@@ -73,6 +74,7 @@ class RecetteManager:
 
         for _, row in self.stock_simule.iterrows():
             try:
+                # Ensure correct type conversion for individual values
                 qte = float(str(row["Qte reste"]).replace(",", "."))
                 unite = str(row["unité"]).lower()
                 page_id = str(row[COLONNE_ID_INGREDIENT])
@@ -130,7 +132,8 @@ class RecetteManager:
             qte_en_stock = 0.0
             if not ing_stock_df.empty:
                 try:
-                    qte_en_stock = float(ing_stock_df["Qte reste"].iloc[0])
+                    # Use .item() to safely extract a scalar from a Series
+                    qte_en_stock = ing_stock_df["Qte reste"].iloc[0].item()
                 except (ValueError, IndexError, KeyError) as e:
                     logger.error(f"Erreur lecture stock pour {ing_id_str} rec {recette_id_str}: {e}")
             else:
@@ -167,7 +170,8 @@ class RecetteManager:
             idx = idx_list[0]
 
             try:
-                qte_actuelle = float(self.stock_simule.loc[idx, "Qte reste"])
+                # Use .item() to safely extract a scalar from a Series
+                qte_actuelle = self.stock_simule.loc[idx, "Qte reste"].item()
                 if qte_actuelle > 0 and qte_necessaire > 0:
                     qte_a_consommer = min(qte_actuelle, qte_necessaire)
                     nouvelle_qte = qte_actuelle - qte_a_consommer
