@@ -298,7 +298,7 @@ class MenuGenerator:
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
             df_hist = self.menus_history_manager.df_menus_historique
-            if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
+            if df_hist.empty or not all(col in df_hist.columns for col col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
                 return set()
 
             semaine_actuelle = date_actuelle.isocalendar()[1]
@@ -742,7 +742,7 @@ def main():
     all_files_uploaded = True
 
     # Process all uploaded files from the single dictionary
-    required_file_names = ["Recettes.csv", "Recettes.csv", "Ingredients.csv", "Ingredients_recettes.csv", "Planning.csv", "Menus.csv"]
+    required_file_names = ["Recettes.csv", "Ingredients.csv", "Ingredients_recettes.csv", "Planning.csv", "Menus.csv"] # Corrected list
 
     for file_name_expected in required_file_names:
         if file_name_expected not in uploaded_file_objects or uploaded_file_objects[file_name_expected] is None:
@@ -758,21 +758,20 @@ def main():
 
         uploaded_file = uploaded_file_objects[file_name_expected]
         try:
-            df = pd.read_csv(uploaded_file, encoding='utf-8')
-            
-            df_name_key = file_name_expected.replace(".csv", "") # Get key for dataframes dict
+            df = None # Initialize df to None for safety
 
-            if "Recettes" in df_name_key:
+            if "Recettes" in file_name_expected: # Check file_name_expected directly
+                df = pd.read_csv(uploaded_file, encoding='utf-8', sep=',') # Explicitly set separator
                 if "Temps_total" in df.columns:
                     df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
                 if "Calories" in df.columns:
                     df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
                 if "Proteines" in df.columns:
                     df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
-                dataframes["Recettes"] = df # Always store as "Recettes"
+                dataframes["Recettes"] = df
                 st.sidebar.success("Recettes.csv chargé avec succès.")
 
-            elif "Planning" in df_name_key:
+            elif "Planning" in file_name_expected:
                 df = pd.read_csv(
                     uploaded_file,
                     encoding='utf-8',
@@ -780,21 +779,24 @@ def main():
                     parse_dates=['Date'],
                     dayfirst=True
                 )
-                dataframes["Planning"] = df # Always store as "Planning"
+                dataframes["Planning"] = df
                 st.sidebar.success("Planning.csv chargé avec succès.")
             
-            elif "Menus" in df_name_key:
-                dataframes["Menus"] = df # Always store as "Menus"
+            elif "Menus" in file_name_expected:
+                df = pd.read_csv(uploaded_file, encoding='utf-8', sep=',') # Assume comma for Menus.csv as well
+                dataframes["Menus"] = df
                 st.sidebar.success("Menus.csv chargé avec succès.")
 
-            elif "Ingredients_recettes" in df_name_key:
-                dataframes["Ingredients_recettes"] = df # Always store as "Ingredients_recettes"
+            elif "Ingredients_recettes" in file_name_expected:
+                df = pd.read_csv(uploaded_file, encoding='utf-8', sep=',') # Assume comma
+                dataframes["Ingredients_recettes"] = df
                 st.sidebar.success("Ingredients_recettes.csv chargé avec succès.")
 
-            elif "Ingredients" in df_name_key:
+            elif "Ingredients" in file_name_expected:
+                df = pd.read_csv(uploaded_file, encoding='utf-8', sep=',') # Assume comma
                 if "Qte reste" in df.columns:
                     df["Qte reste"] = pd.to_numeric(df["Qte reste"], errors='coerce').fillna(0).astype(float)
-                dataframes["Ingredients"] = df # Always store as "Ingredients"
+                dataframes["Ingredients"] = df
                 st.sidebar.success("Ingredients.csv chargé avec succès.")
 
         except Exception as e:
@@ -802,14 +804,10 @@ def main():
             all_files_uploaded = False
             
     # Final check if all required dataframes are present in the 'dataframes' dictionary
-    # This is distinct from checking if the file objects were uploaded.
     final_required_df_keys = ["Recettes", "Planning", "Menus", "Ingredients", "Ingredients_recettes"]
     for df_key in final_required_df_keys:
         if df_key not in dataframes:
             all_files_uploaded = False
-            # A more general warning for the final check, as specific warnings are given above
-            # st.sidebar.warning(f"Le DataFrame '{df_key}' n'a pas pu être chargé.") 
-            # Removed redundant warning as specific file warnings are already handled.
             break
 
     if not all_files_uploaded:
