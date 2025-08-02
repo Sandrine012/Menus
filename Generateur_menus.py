@@ -243,7 +243,7 @@ def main():
                 "Recettes.csv",
             )
             verifier_colonnes(dfs["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
-            verifier_colonnes(dfs["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
+            verifier_colonnes(dfs["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingrédients_recettes.csv")
             verifier_colonnes(dfs["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
             verifier_colonnes(dfs["Menus"], ["Date", "Recette"], "Menus.csv")
         except ValueError:
