@@ -709,39 +709,36 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
+    # Individual uploaders for the constant files
     uploaded_files = {}
-    file_names = ["Recettes.csv", "Planning.csv", "Menus.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
-    for file_name in file_names:
+    
+    file_names_individual = ["Recettes.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
+    for file_name in file_names_individual:
         uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
+
+    # Combined uploader for Planning.csv and Menus.csv
+    uploaded_planning_menus = st.sidebar.file_uploader(
+        "Uploader Planning.csv et Menus.csv (sélectionnez les deux)",
+        type="csv",
+        accept_multiple_files=True,
+        key="planning_menus_uploader"
+    )
 
     dataframes = {}
     all_files_uploaded = True
+
+    # Process individual uploads first
     for file_name, uploaded_file in uploaded_files.items():
         if uploaded_file is not None:
             try:
-                if file_name == "Planning.csv":
-                    uploaded_file.seek(0)
-                    # Lire Planning.csv avec parsing de la date, délimiteur ';' et dayfirst=True pour le bon format français
-                    df = pd.read_csv(
-                        uploaded_file,
-                        encoding='utf-8',
-                        sep=';',
-                        parse_dates=['Date'],
-                        dayfirst=True
-                    )
-                else:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                # ...
-
-
-                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
+                df = pd.read_csv(uploaded_file, encoding='utf-8')
+                # ... (rest of your existing type conversions for Recettes, Ingredients, Ingredients_recettes)
                 if "Temps_total" in df.columns:
                     df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
                 if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
+                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
                 if "Proteines" in df.columns:
                     df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
-
 
                 dataframes[file_name.replace(".csv", "")] = df
                 st.sidebar.success(f"{file_name} chargé avec succès.")
@@ -751,10 +748,57 @@ def main():
                 break
         else:
             all_files_uploaded = False
+            # Don't break here, allow the combined uploader to be checked
+            # if this file is not essential for initial check
+            pass # Keep looping to check other individual files
+
+    # Process combined Planning and Menus uploads
+    if uploaded_planning_menus:
+        found_planning = False
+        found_menus = False
+        for uploaded_file in uploaded_planning_menus:
+            file_name = uploaded_file.name
+            try:
+                if "Planning.csv" in file_name:
+                    df = pd.read_csv(
+                        uploaded_file,
+                        encoding='utf-8',
+                        sep=';',
+                        parse_dates=['Date'],
+                        dayfirst=True
+                    )
+                    dataframes["Planning"] = df
+                    st.sidebar.success("Planning.csv chargé avec succès.")
+                    found_planning = True
+                elif "Menus.csv" in file_name:
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+                    dataframes["Menus"] = df
+                    st.sidebar.success("Menus.csv chargé avec succès.")
+                    found_menus = True
+            except Exception as e:
+                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
+                all_files_uploaded = False # Indicate failure if any of these fail
+        
+        if not found_planning:
+            st.sidebar.warning("Planning.csv n'a pas été trouvé parmi les fichiers sélectionnés.")
+            all_files_uploaded = False
+        if not found_menus:
+            st.sidebar.warning("Menus.csv n'a pas été trouvé parmi les fichiers sélectionnés.")
+            all_files_uploaded = False
+    else:
+        st.sidebar.warning("Veuillez uploader Planning.csv et Menus.csv.")
+        all_files_uploaded = False
+
+
+    # Final check if all required dataframes are present
+    required_dfs = ["Recettes", "Planning", "Menus", "Ingredients", "Ingredients_recettes"]
+    for df_name in required_dfs:
+        if df_name not in dataframes:
+            all_files_uploaded = False
             break
 
     if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
+        st.warning("Veuillez charger tous les fichiers CSV nécessaires pour continuer.")
         return
 
     # Vérification des colonnes essentielles après le chargement
