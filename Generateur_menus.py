@@ -1,87 +1,171 @@
+# ================================================================
+#           GÉNÉRATEUR DE MENUS & LISTE DE COURSES
+#                  (version 3 boutons upload)
+# ================================================================
+
 import streamlit as st
 import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
 
-# ------------------------------------------------------------------
-#                         CONSTANTES GLOBALES
-# ------------------------------------------------------------------
-NB_JOURS_ANTI_REPETITION = 42
+# ----------------------------------------------------------------
+#                 CONSTANTES & PARAMÈTRES GLOBAUX
+# ----------------------------------------------------------------
+NB_JOURS_ANTI_REPETITION = 42         # éviter de reproposer une recette < 6 semaines
 COLONNE_NOM = "Nom"
 COLONNE_TEMPS_TOTAL = "Temps_total"
-COLONNE_ID_RECETTE = "Page_ID"          # utilisé comme ID pour Recettes et Ingredients_recettes
-COLONNE_ID_INGREDIENT = "Page_ID"       # utilisé comme ID pour Ingredients
+COLONNE_ID_RECETTE = "Page_ID"        # même nom pour Recettes et Ingredients_recettes
+COLONNE_ID_INGREDIENT = "Page_ID"     # ID unique des ingrédients
 COLONNE_AIME_PAS_PRINCIP = "Aime_pas_princip"
-VALEUR_DEFAUT_TEMPS_PREPARATION = 10
+VALEUR_DEFAUT_TEMPS_PREPARATION = 10  # si la durée est vide
 TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
-REPAS_EQUILIBRE = 700
+REPAS_EQUILIBRE = 700                 # seuil indicatif de calories/repas
 
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 #                       CONFIGURATION LOGGER
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------
-#                          OUTILS COMMUNS
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
+#                        OUTILS UTILITAIRES
+# ----------------------------------------------------------------
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
-    """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
+    """Vérifie la présence des colonnes attendues dans un DataFrame."""
     colonnes_manquantes = [col for col in colonnes_attendues if col not in df.columns]
     if colonnes_manquantes:
-        st.error(
-            f"Colonnes manquantes dans {nom_fichier}: {', '.join(colonnes_manquantes)}"
-        )
-        raise ValueError(
-            f"Colonnes manquantes dans {nom_fichier}: {colonnes_manquantes}"
-        )
+        st.error(f"Colonnes manquantes dans {nom_fichier} : {', '.join(colonnes_manquantes)}")
+        raise ValueError(f"Colonnes manquantes dans {nom_fichier} : {colonnes_manquantes}")
 
-# ------------------------------------------------------------------
-#                        CLASSES MÉTIER (inchangées)
-# ------------------------------------------------------------------
-# ... (toutes les classes RecetteManager, MenusHistoryManager, MenuGenerator
-#      sont reprises sans aucune modification fonctionnelle)
-# ------------------------------------------------------------------
-# Pour éviter un message trop long, ces classes sont omises ici mais
-# doivent être copiées **à l’identique** depuis votre code d’origine.
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
+#                       CLASSES MÉTIER
+# ----------------------------------------------------------------
+class RecetteManager:
+    """Gère le filtrage et la sélection des recettes."""
+    def __init__(self, df_recettes, df_ing_recettes):
+        self.recettes = df_recettes.copy()
+        self.ing_recettes = df_ing_recettes.copy()
 
-# ------------------------------------------------------------------
+    def recettes_disponibles(self, aime_pas, delai_repetition, aujourd_hui, menus_history):
+        """Filtre les recettes selon : exclusions, anti-répétition, etc."""
+        logger.debug("Filtrage des recettes…")
+        df = self.recettes.copy()
+
+        # 1. Exclure ingrédients détestés
+        if aime_pas:
+            pattern = "|".join(aime_pas)
+            df = df[~df[COLONNE_AIME_PAS_PRINCIP].str.contains(pattern, case=False, na=False)]
+
+        # 2. Anti-répétition sur NB_JOURS_ANTI_REPETITION
+        if not menus_history.empty:
+            dejavu = menus_history[
+                menus_history["Date"] >= aujourd_hui - timedelta(days=delai_repetition)
+            ][COLONNE_NOM].unique()
+            df = df[~df[COLONNE_NOM].isin(dejavu)]
+
+        logger.debug("Recettes restantes : %d", len(df))
+        return df
+
+    def choisir_recette(self, df_filtre):
+        """Retourne une recette aléatoire parmi le DataFrame filtré."""
+        if df_filtre.empty:
+            raise ValueError("Aucune recette disponible après filtrage.")
+        return df_filtre.sample(1).iloc[0]
+
+class MenusHistoryManager:
+    """Charge et met à jour l’historique des menus."""
+    def __init__(self, df_menus):
+        self.df_menus = df_menus.copy()
+
+    def ajouter_menu(self, date, recette):
+        nouvelle_ligne = pd.DataFrame({"Date": [date], COLONNE_NOM: [recette]})
+        self.df_menus = pd.concat([self.df_menus, nouvelle_ligne], ignore_index=True)
+
+class MenuGenerator:
+    """Génère un menu hebdomadaire équilibré et la liste de courses associée."""
+    def __init__(self, df_menus, df_recettes, df_planning, df_ingredients, df_ing_recettes):
+        self.history = MenusHistoryManager(df_menus)
+        self.recette_mgr = RecetteManager(df_recettes, df_ing_recettes)
+        self.planning = df_planning
+        self.ingredients_stock = df_ingredients
+        self.ing_recettes = df_ing_recettes
+
+    def generer_menu(self):
+        aujourd_hui = datetime.today().normalize()
+        menu_genere = []
+        liste_courses = []
+
+        for _, ligne in self.planning.iterrows():
+            date_repas = ligne["Date"]
+            aime_pas = ligne.get("Aime_pas", "").split(",") if "Aime_pas" in ligne else []
+
+            # Filtrer les recettes admissibles
+            recettes_ok = self.recette_mgr.recettes_disponibles(
+                aime_pas,
+                NB_JOURS_ANTI_REPETITION,
+                aujourd_hui,
+                self.history.df_menus,
+            )
+            recette_choisie = self.recette_mgr.choisir_recette(recettes_ok)
+
+            # Mettre à jour historique
+            self.history.ajouter_menu(date_repas, recette_choisie[COLONNE_NOM])
+
+            # Ajouter au résultat
+            menu_genere.append(
+                {
+                    "Date": date_repas.strftime("%d/%m/%Y"),
+                    "Participant(s)": ligne.get("Participants", ""),
+                    COLONNE_NOM: recette_choisie[COLONNE_NOM],
+                }
+            )
+
+            # Vérifier ingrédients manquants
+            ing_needed = self.ing_recettes[self.ing_recettes[COLONNE_ID_RECETTE] == recette_choisie[COLONNE_ID_RECETTE]]
+            for _, ing in ing_needed.iterrows():
+                id_ing = ing["Ingrédient ok"]
+                qte_requise = ing["Qté/pers_s"] * max(ligne.get("Participants", 1), 1)
+                stock_row = self.ingredients_stock[self.ingredients_stock[COLONNE_ID_INGREDIENT] == id_ing]
+                if stock_row.empty or stock_row.iloc[0]["Qte reste"] < qte_requise:
+                    liste_courses.append(f"{id_ing} : {qte_requise}")
+
+        df_menu_genere = pd.DataFrame(menu_genere)
+        return df_menu_genere, sorted(liste_courses)
+
+# ----------------------------------------------------------------
 #                        INTERFACE STREAMLIT
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 def main():
-    st.set_page_config(
-        layout="wide", page_title="Générateur de Menus et Liste de Courses"
-    )
+    st.set_page_config(page_title="Générateur de Menus", layout="wide")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
 
     st.sidebar.header("Chargement des fichiers CSV")
-    st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
+    st.sidebar.info("Charge les cinq CSV nécessaires : Recettes, Ingredients_recettes, Ingredients, Planning, Menus.")
 
-    # ----------- 1. Uploader combiné Recettes + Ingredients_recettes -----------
-    uploaded_recettes_combo = st.sidebar.file_uploader(
-        "Uploader Recettes.csv ET Ingredients_recettes.csv (sélectionnez les deux)",
+    # ----------- 1. Bouton combiné Recettes + Ingredients_recettes -----------
+    fichiers_recettes_combo = st.sidebar.file_uploader(
+        "Uploader Recettes.csv et Ingredients_recettes.csv",
         type="csv",
         accept_multiple_files=True,
         key="recettes_combo",
     )
 
-    # -------------------- 2. Uploader Ingredients --------------------
-    uploaded_ingredients = st.sidebar.file_uploader(
+    # -------------------- 2. Bouton Ingredients --------------------
+    fichier_ingredients = st.sidebar.file_uploader(
         "Uploader Ingredients.csv",
         type="csv",
         key="ingredients_file",
     )
 
-    # ----------- 3. Uploader combiné Planning + Menus ----------------
-    uploaded_planning_menus = st.sidebar.file_uploader(
-        "Uploader Planning.csv ET Menus.csv (sélectionnez les deux)",
+    # ----------- 3. Bouton combiné Planning + Menus ----------------
+    fichiers_planning_menus = st.sidebar.file_uploader(
+        "Uploader Planning.csv et Menus.csv",
         type="csv",
         accept_multiple_files=True,
         key="planning_menus_combo",
@@ -90,127 +174,83 @@ def main():
     # ----------------------------------------------------------------
     #                  LECTURE DES FICHIERS & VALIDATION
     # ----------------------------------------------------------------
-    dataframes = {}
-    all_files_uploaded = True
+    dfs = {}
+    tout_ok = True
 
-    # --- traitement Recettes + Ingredients_recettes ---
-    if uploaded_recettes_combo:
-        found_recettes = False
-        found_ing_recettes = False
-        for file in uploaded_recettes_combo:
-            name = file.name
+    # --- Traitement Recettes + Ingredients_recettes ---
+    if fichiers_recettes_combo:
+        for f in fichiers_recettes_combo:
+            nom = f.name.lower()
             try:
-                df = pd.read_csv(file, encoding="utf-8")
-                if "Recettes.csv" in name:
-                    dataframes["Recettes"] = df
-                    found_recettes = True
+                df = pd.read_csv(f, encoding="utf-8")
+                if "recettes" in nom:
+                    dfs["Recettes"] = df
                     st.sidebar.success("Recettes.csv chargé.")
-                elif "Ingredients_recettes.csv" in name:
-                    dataframes["Ingredients_recettes"] = df
-                    found_ing_recettes = True
+                elif "ingredients_recettes" in nom:
+                    dfs["Ingredients_recettes"] = df
                     st.sidebar.success("Ingredients_recettes.csv chargé.")
             except Exception as e:
-                st.sidebar.error(f"Erreur chargement {name}: {e}")
-                all_files_uploaded = False
-        if not found_recettes:
-            st.sidebar.warning("Recettes.csv manquant.")
-            all_files_uploaded = False
-        if not found_ing_recettes:
-            st.sidebar.warning("Ingredients_recettes.csv manquant.")
-            all_files_uploaded = False
+                st.sidebar.error(f"Erreur chargement {nom} : {e}")
+                tout_ok = False
+        # Vérifier présence des deux fichiers
+        if "Recettes" not in dfs or "Ingredients_recettes" not in dfs:
+            st.sidebar.warning("Il manque Recettes.csv ou Ingredients_recettes.csv.")
+            tout_ok = False
     else:
-        all_files_uploaded = False
+        tout_ok = False
 
     # ------------------- Ingredients -------------------
-    if uploaded_ingredients is not None:
+    if fichier_ingredients:
         try:
-            df = pd.read_csv(uploaded_ingredients, encoding="utf-8")
-            dataframes["Ingredients"] = df
+            dfs["Ingredients"] = pd.read_csv(fichier_ingredients, encoding="utf-8")
             st.sidebar.success("Ingredients.csv chargé.")
         except Exception as e:
-            st.sidebar.error(f"Erreur chargement Ingredients.csv: {e}")
-            all_files_uploaded = False
+            st.sidebar.error(f"Erreur chargement Ingredients.csv : {e}")
+            tout_ok = False
     else:
-        all_files_uploaded = False
+        tout_ok = False
 
-    # --- traitement Planning + Menus ---
-    if uploaded_planning_menus:
-        found_planning = False
-        found_menus = False
-        for file in uploaded_planning_menus:
-            name = file.name
+    # --- Traitement Planning + Menus ---
+    if fichiers_planning_menus:
+        for f in fichiers_planning_menus:
+            nom = f.name.lower()
             try:
-                if "Planning.csv" in name:
-                    df = pd.read_csv(
-                        file,
-                        encoding="utf-8",
-                        sep=";",
-                        parse_dates=["Date"],
-                        dayfirst=True,
+                if "planning" in nom:
+                    dfs["Planning"] = pd.read_csv(
+                        f, sep=";", encoding="utf-8", parse_dates=["Date"], dayfirst=True
                     )
-                    dataframes["Planning"] = df
-                    found_planning = True
                     st.sidebar.success("Planning.csv chargé.")
-                elif "Menus.csv" in name:
-                    df = pd.read_csv(file, encoding="utf-8")
-                    dataframes["Menus"] = df
-                    found_menus = True
+                elif "menus" in nom:
+                    dfs["Menus"] = pd.read_csv(f, encoding="utf-8")
                     st.sidebar.success("Menus.csv chargé.")
             except Exception as e:
-                st.sidebar.error(f"Erreur chargement {name}: {e}")
-                all_files_uploaded = False
-        if not found_planning:
-            st.sidebar.warning("Planning.csv manquant.")
-            all_files_uploaded = False
-        if not found_menus:
-            st.sidebar.warning("Menus.csv manquant.")
-            all_files_uploaded = False
+                st.sidebar.error(f"Erreur chargement {nom} : {e}")
+                tout_ok = False
+        if "Planning" not in dfs or "Menus" not in dfs:
+            st.sidebar.warning("Il manque Planning.csv ou Menus.csv.")
+            tout_ok = False
     else:
-        all_files_uploaded = False
+        tout_ok = False
 
     # ----------------------------------------------------------------
-    #        VÉRIFICATION DES COLONNES ESSENTIELLES (inchangée)
+    #               VÉRIFICATION DES COLONNES ESSENTIELLES
     # ----------------------------------------------------------------
-    if all_files_uploaded:
+    if tout_ok:
         try:
             verifier_colonnes(
-                dataframes["Recettes"],
-                [
-                    COLONNE_ID_RECETTE,
-                    COLONNE_NOM,
-                    COLONNE_TEMPS_TOTAL,
-                    COLONNE_AIME_PAS_PRINCIP,
-                    "Transportable",
-                    "Calories",
-                    "Proteines",
-                ],
+                dfs["Recettes"],
+                [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"],
                 "Recettes.csv",
             )
-            verifier_colonnes(
-                dataframes["Planning"],
-                ["Date", "Participants", "Transportable", "Temps", "Nutrition"],
-                "Planning.csv",
-            )
-            verifier_colonnes(
-                dataframes["Menus"], ["Date", "Recette"], "Menus.csv"
-            )
-            verifier_colonnes(
-                dataframes["Ingredients"],
-                [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"],
-                "Ingredients.csv",
-            )
-            verifier_colonnes(
-                dataframes["Ingredients_recettes"],
-                [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"],
-                "Ingredients_recettes.csv",
-            )
+            verifier_colonnes(dfs["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
+            verifier_colonnes(dfs["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
+            verifier_colonnes(dfs["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+            verifier_colonnes(dfs["Menus"], ["Date", "Recette"], "Menus.csv")
         except ValueError:
-            st.error(
-                "Des colonnes essentielles sont manquantes. Vérifiez vos CSV."
-            )
-            return
-    else:
-        st.warning("Veuillez charger tous les fichiers requis.")
+            tout_ok = False
+
+    if not tout_ok:
+        st.warning("Veuillez charger correctement les cinq fichiers avant de continuer.")
         return
 
     # ----------------------------------------------------------------
@@ -218,87 +258,56 @@ def main():
     # ----------------------------------------------------------------
     st.markdown("---")
     st.header("1. Générer le Menu")
-    st.write(
-        "Cliquez sur le bouton ci-dessous pour générer le menu hebdomadaire "
-        "et la liste de courses."
-    )
 
     if st.button("🚀 Générer le Menu"):
-        with st.spinner("Génération du menu en cours…"):
+        with st.spinner("Génération en cours…"):
             try:
-                # Conversion de colonnes numériques (si nécessaire)
-                if "Temps_total" in dataframes["Recettes"].columns:
-                    dataframes["Recettes"]["Temps_total"] = pd.to_numeric(
-                        dataframes["Recettes"]["Temps_total"],
-                        errors="coerce"
-                    ).fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-
-                # Initialisation du générateur de menus
-                menu_generator = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"],
-                )
-
-                df_menu_genere, liste_courses = menu_generator.generer_menu()
-
-                st.success("🎉 Menu généré avec succès !")
-
-                # ---------------- Affichage menu ----------------
-                st.header("2. Menu Généré")
-                st.dataframe(df_menu_genere)
-
-                # Préparation export CSV
-                df_export = df_menu_genere.copy()
-                df_export = df_export.rename(
-                    columns={
-                        "Participant(s)": "Participant(s)",
-                        COLONNE_NOM: "Nom",
-                        "Date": "Date",
-                    }
-                )
-                df_export["Date"] = pd.to_datetime(
-                    df_export["Date"],
-                    format="%d/%m/%Y %H:%M",
+                # Harmoniser le type numérique de Temps_total
+                dfs["Recettes"][COLONNE_TEMPS_TOTAL] = pd.to_numeric(
+                    dfs["Recettes"][COLONNE_TEMPS_TOTAL],
                     errors="coerce",
-                ).dt.strftime("%Y-%m-%d %H:%M")
-                df_export = df_export[["Date", "Participant(s)", "Nom"]]
-                csv_menu = df_export.to_csv(
-                    index=False, sep=",", encoding="utf-8-sig"
+                ).fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+
+                gen = MenuGenerator(
+                    dfs["Menus"],
+                    dfs["Recettes"],
+                    dfs["Planning"],
+                    dfs["Ingredients"],
+                    dfs["Ingredients_recettes"],
                 )
+                df_menu, liste_courses = gen.generer_menu()
+
+                st.success("🎉 Menu généré !")
+                st.header("2. Menu Généré")
+                st.dataframe(df_menu)
+
+                # Export menu
+                csv_menu = df_menu.to_csv(index=False, encoding="utf-8-sig")
                 st.download_button(
-                    label="📥 Télécharger le menu en CSV",
+                    "📥 Télécharger le menu (CSV)",
                     data=csv_menu,
                     file_name="menu_genere.csv",
                     mime="text/csv",
                 )
 
-                # ---------------- Liste de courses -------------
-                st.header("3. Liste de Courses (Ingrédients manquants)")
+                # Liste de courses
+                st.header("3. Liste de Courses (ingrédients manquants)")
                 if liste_courses:
-                    liste_courses_df = pd.DataFrame(
-                        {"Ingrédient et Quantité": liste_courses}
-                    )
-                    st.dataframe(liste_courses_df)
-                    csv_courses = liste_courses_df.to_csv(
-                        index=False, sep=";", encoding="utf-8-sig"
-                    )
+                    df_courses = pd.DataFrame({"Ingrédient et Quantité": liste_courses})
+                    st.dataframe(df_courses)
+                    csv_courses = df_courses.to_csv(index=False, sep=";", encoding="utf-8-sig")
                     st.download_button(
-                        label="Télécharger la liste de courses (CSV)",
+                        "Télécharger la liste de courses (CSV)",
                         data=csv_courses,
                         file_name="liste_courses.csv",
                         mime="text/csv",
                     )
                 else:
-                    st.info("Aucun ingrédient manquant identifié.")
+                    st.info("Aucun ingrédient manquant 🎉")
             except Exception as e:
-                st.error(
-                    f"Une erreur est survenue lors de la génération : {e}"
-                )
+                st.error(f"Erreur lors de la génération : {e}")
                 logger.exception("Erreur génération menu")
 
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 if __name__ == "__main__":
     main()
