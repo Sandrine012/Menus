@@ -695,17 +695,17 @@ class MenuGenerator:
         else:
             logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
 
-    def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
+    def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
         info_stock_str = ""
         if recette_id_str_pour_eval:
-            score_dispo, pourcentage_dispo, _ = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_pour_eval, self.compter_participants(participants_str_codes))
+            score_dispo, pourcentage_dispo, _ = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_pour_eval, self.compter_participants(participants_str))
             info_stock_str = f"Stock: {pourcentage_dispo:.0f}% des ingrédients disponibles (score: {score_dispo:.2f})"
 
         remarques_finales = f"{remarques_str} {info_stock_str}".strip()
         resultats_liste.append({
             "Date": date_repas.strftime("%d/%m/%Y %H:%M"),
             COLONNE_NOM: nom_menu_str,
-            "Participant(s)": participants_str_codes,
+            "Participant(s)": participants_str,
             "Remarques spécifiques": remarques_finales,
             "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-",
             "Recette_ID": recette_id_str_pour_eval
@@ -1028,41 +1028,86 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
-    st.sidebar.subheader("Données Notion (chargement initial)")
-    try:
-        # Chargement des données Notion une seule fois et mise en cache
-        notion_data = load_notion_data(saison_selectionnee)
-        dataframes.update(notion_data)
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
-        return
+    st.markdown("---")
+    st.header("1. Générer et Exporter en 1 clic")
+    st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion.")
+    
+    if st.button("🚀 Générer et Envoyer le Menu Réaliste (1 clic)", use_container_width=True):
+        st.session_state['generation_reussie'] = False
+        
+        with st.spinner("Chargement des données Notion..."):
+            try:
+                notion_data = load_notion_data(saison_selectionnee)
+                dataframes.update(notion_data)
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
+                return
+        
+        with st.spinner("Vérification des colonnes..."):
+            try:
+                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
+                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
+            except ValueError as ve:
+                st.error(f"Erreur de données : {ve}")
+                return
 
-    try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
-        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
-        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
-    except ValueError:
-        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
-        return
+        with st.spinner("Génération du menu réaliste..."):
+            try:
+                menu_generator_realiste = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=False
+                )
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
+                st.session_state['df_menu_realiste'] = df_menu_realiste
+                st.session_state['liste_courses_realiste'] = liste_courses_realiste
+            except Exception as e:
+                st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
+                return
 
-    if "Temps_total" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Temps_total"] = pd.to_numeric(dataframes["Recettes"]["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-    if "Calories" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Calories"] = pd.to_numeric(dataframes["Recettes"]["Calories"], errors='coerce')
-    if "Proteines" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Proteines"] = pd.to_numeric(dataframes["Recettes"]["Proteines"], errors='coerce')
+        with st.spinner("Envoi du menu à Notion..."):
+            success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
+            if success > 0:
+                st.success(f"✅ Opération '1 clic' réussie ! {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
+            if failure > 0:
+                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
+            if success == 0 and failure == 0:
+                st.info("Aucun repas valide à ajouter.")
+
+        st.session_state['generation_reussie'] = True
 
     st.markdown("---")
-    st.header("1. Générer les Menus")
+    st.header("2. Générer les Menus")
     st.write("Cliquez sur le bouton ci-dessous pour générer les deux versions du menu hebdomadaire et leurs listes de courses.")
     
     if st.button("🚀 Générer 2 Menus (Réaliste & Idéal)"):
-        
-        # Réinitialisation de l'état de la session
         st.session_state['generation_reussie'] = False
         
+        with st.spinner("Chargement des données Notion..."):
+            try:
+                notion_data = load_notion_data(saison_selectionnee)
+                dataframes.update(notion_data)
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
+                return
+
+        with st.spinner("Vérification des colonnes..."):
+            try:
+                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
+                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
+            except ValueError as ve:
+                st.error(f"Erreur de données : {ve}")
+                return
+
         with st.spinner("Génération des deux menus en cours..."):
             try:
                 # Génération du menu réaliste (avec décrémentation du stock)
@@ -1079,7 +1124,6 @@ def main():
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
                 # Génération du menu idéal (sans décrémentation du stock)
-                # On doit re-créer une instance car le stock a été modifié dans la première génération
                 menu_generator_ideal = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1093,7 +1137,6 @@ def main():
                 st.session_state['liste_courses_ideal'] = liste_courses_ideal
                 
                 st.session_state['generation_reussie'] = True
-
             except ValueError as ve:
                 st.error(f"Erreur de données lors de la génération : {ve}")
                 logger.exception("Erreur de données")
