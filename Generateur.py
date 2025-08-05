@@ -132,8 +132,12 @@ def extract_ingredients():
             unite=(u_prop["select"] or {}).get("name","")
         else:
             unite=""
-        qte_prop = pr.get("Qte reste",{})
-        qte = qte_prop.get("number") if qte_prop.get("type")=="number" else ""
+        qte_prop = pr.get("Qte reste", {})
+        qte = ""
+        if qte_prop.get("type") == "formula":
+            formula_result = qte_prop.get("formula", {})
+            if formula_result.get("type") == "number":
+                qte = formula_result.get("number")
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
@@ -193,3 +197,4 @@ st.divider()
 bouton("Extraire ingrédients-recettes",    extract_ingr_rec,          CSV_INGREDIENTS_RECETTES)
 
 st.info("Chaque bouton interroge uniquement la base concernée et produit un CSV conforme à vos modèles (UTF-8-SIG).")
+
