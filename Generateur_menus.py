@@ -427,22 +427,34 @@ class MenuGenerator:
         deux_jours_avant = date_repas - timedelta(days=2)
         
         recettes_candidates_ids = set()
-        for _, row in df_hist.iterrows():
-            if row['Date'] >= deux_jours_avant and row['Date'] < date_repas:
-                recette_id = str(row['Recette']).strip()
-                if self.recette_manager.est_transportable(recette_id):
-                    recettes_candidates_ids.add(recette_id)
+        
+        # Filtre sur l'historique des menus pour les dates et les recettes non vides
+        recent_menus = df_hist[
+            (df_hist['Date'] >= deux_jours_avant) &
+            (df_hist['Date'] < date_repas) &
+            df_hist['Recette'].notna()
+        ]
+
+        if recent_menus.empty:
+            logger.debug(f"Aucune recette récente transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}")
+            return None
+            
+        for recette_id in recent_menus['Recette'].unique():
+            recette_id_str = str(recette_id).strip()
+            if self.recette_manager.est_transportable(recette_id_str):
+                recettes_candidates_ids.add(recette_id_str)
         
         # Filtre les recettes déjà utilisées dans la génération de menu actuelle
         recettes_candidates_ids = list(recettes_candidates_ids - used_recipes_in_current_gen)
 
         if not recettes_candidates_ids:
-            logger.debug(f"Aucune recette de reste transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}.")
+            logger.debug(f"Aucune recette de reste transportable trouvée parmi les repas récents pour le {date_repas.strftime('%Y-%m-%d')}.")
             return None
 
         recette_choisie_id = random.choice(recettes_candidates_ids)
         logger.debug(f"Recette de reste transportable choisie : {self.recette_manager.obtenir_nom(recette_choisie_id)}")
         return recette_choisie_id
+
 
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str):
@@ -624,3 +636,17 @@ if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
             except ValueError as ve:
                 st.error(f"Erreur de génération du menu : {ve}")
             except Exception as e:
+                st.error(f"Une erreur inattendue est survenue lors de la génération du menu : {e}")
+
+if 'menu_genere' in st.session_state and not st.session_state['menu_genere'].empty:
+    st.dataframe(st.session_state['menu_genere'], use_container_width=True)
+    
+    csv_file = st.session_state['menu_genere'].to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Télécharger le menu généré",
+        data=csv_file,
+        file_name='menu_genere.csv',
+        mime='text/csv'
+    )
+else:
+    st.info("Le menu généré s'affichera ici.")
