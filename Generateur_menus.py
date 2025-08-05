@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import time, httpx
 from notion_client import Client
 from notion_client.errors import RequestTimeoutError, APIResponseError
+from collections import defaultdict
 
 # ────── CONFIGURATION INITIALE ──────────────────────────────────
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
@@ -477,6 +478,24 @@ class MenusHistoryManager:
             self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
         else:
             logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
+        
+        self.recette_frequency_count = self._calculate_frequency()
+
+    def _calculate_frequency(self):
+        """Calcule la fréquence de chaque recette dans l'historique."""
+        if self.df_menus_historique.empty or 'Recette' not in self.df_menus_historique.columns:
+            return defaultdict(int)
+        
+        frequency = defaultdict(int)
+        for recette_id_str in self.df_menus_historique['Recette'].astype(str):
+            frequency[recette_id_str] += 1
+        
+        logger.info(f"Fréquence des recettes calculée. Ex: {list(frequency.items())[:5]}")
+        return frequency
+
+    def get_frequency(self, recette_id_str):
+        """Retourne la fréquence d'une recette."""
+        return self.recette_frequency_count.get(str(recette_id_str), 0)
 
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
@@ -615,8 +634,9 @@ class MenuGenerator:
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats généraux.")
         return candidates_triees[:10], recettes_ingredients_manquants
 
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
-        logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, ideal_mode=False):
+        logger.debug(f"--- Traitement Repas Standard ({'Idéal' if ideal_mode else 'Réaliste'}) pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
+        
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
             transportable_req_str, temps_req_str, nutrition_req_str
@@ -625,65 +645,36 @@ class MenuGenerator:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
             return None, {}
 
-        recettes_historiques_semaine_set = self.recettes_meme_semaine_annees_precedentes(date_repas)
+        # Calcul des scores de fréquence pour les candidats
+        scores_frequence = {r_id: self.menus_history_manager.get_frequency(r_id) for r_id in recettes_candidates_initiales}
+        
+        # Calcul des scores de disponibilité
         scores_candidats_dispo = {
             r_id: self.recette_manager.evaluer_disponibilite_et_manquants(r_id, participants_count_int)[0]
             for r_id in recettes_candidates_initiales
         }
-        preferred_candidates_list = [r_id for r_id in recettes_candidates_initiales if r_id in recettes_historiques_semaine_set]
-        if preferred_candidates_list:
-            logger.debug(f"{len(preferred_candidates_list)} candidats préférés (historique semaine précédente) trouvés.")
 
-        mots_cles_exclus_set = set()
-        if menu_recent_noms_list:
-            for nom_plat_recent in menu_recent_noms_list:
-                if isinstance(nom_plat_recent, str) and nom_plat_recent.strip():
-                    try: mots_cles_exclus_set.add(nom_plat_recent.lower().split()[0])
-                    except IndexError: pass
-        if mots_cles_exclus_set:
-            logger.debug(f"Mots clés exclus pour anti-répétition (génération actuelle): {mots_cles_exclus_set}")
+        # Définir le critère de tri final
+        def get_sort_key_realiste(r_id):
+            # En mode Réaliste, la disponibilité est le critère principal
+            # La fréquence est utilisée comme critère secondaire (moindre est mieux)
+            return (scores_candidats_dispo.get(r_id, -1), -scores_frequence.get(r_id, 0))
 
-        def get_first_word_local(recette_id_str_func):
-            nom = self.recette_manager.obtenir_nom(recette_id_str_func)
-            return nom.lower().split()[0] if nom and nom.strip() and "Recette_ID_" not in nom else ""
+        def get_sort_key_ideal(r_id):
+            # En mode Idéal, la fréquence est le critère principal
+            # La disponibilité devient un critère secondaire
+            return (-scores_frequence.get(r_id, 0), scores_candidats_dispo.get(r_id, -1))
 
-        recette_choisie_final = None
-        if preferred_candidates_list:
-            preferred_valides_motcle = []
-            for r_id in preferred_candidates_list:
-                first_word = get_first_word_local(r_id)
-                if first_word not in mots_cles_exclus_set:
-                    preferred_valides_motcle.append(r_id)
-                else:
-                    logger.debug(f"Candidat préféré {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
+        sort_key_function = get_sort_key_ideal if ideal_mode else get_sort_key_realiste
 
-            if preferred_valides_motcle:
-                recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les préférées valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
-            else:
-                recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
-
-        if not recette_choisie_final:
-            candidates_valides_motcle = []
-            for r_id in recettes_candidates_initiales:
-                first_word = get_first_word_local(r_id)
-                if first_word not in mots_cles_exclus_set:
-                    candidates_valides_motcle.append(r_id)
-                else:
-                    logger.debug(f"Candidat général {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
-
-            if candidates_valides_motcle:
-                recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
-            elif recettes_candidates_initiales:
-                recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
-
+        recettes_choisies_finales = sorted(recettes_candidates_initiales, key=sort_key_function, reverse=True)
+        recette_choisie_final = recettes_choisies_finales[0] if recettes_choisies_finales else None
+        
         if recette_choisie_final:
-            logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
+            logger.debug(f"Recette finale sélectionnée pour repas ({'Idéal' if ideal_mode else 'Réaliste'}): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}). Score dispo: {scores_candidats_dispo.get(recette_choisie_final, 'N/A'):.2f}, Fréquence: {scores_frequence.get(recette_choisie_final, 'N/A')}")
             return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
-        logger.debug(f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
+        
+        logger.debug(f"Aucune recette finale sélectionnée pour repas ({'Idéal' if ideal_mode else 'Réaliste'}) à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
         return None, {}
 
     def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
@@ -756,7 +747,7 @@ class MenuGenerator:
         return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
 
 
-    def generer_menu(self):
+    def generer_menu(self, ideal_mode=False):
         resultats_df_list = []
         repas_b_utilises_ids = []
         plats_transportables_semaine = {}
@@ -795,7 +786,7 @@ class MenuGenerator:
             else:
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                    menu_recent_noms, transportable_req, temps_req, nutrition_req
+                    menu_recent_noms, transportable_req, temps_req, nutrition_req, ideal_mode=ideal_mode
                 )
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
@@ -897,6 +888,26 @@ def load_notion_data(saison_filtre_selection):
         "Ingredients_recettes": df_ingredients_recettes
     }
 
+def create_download_button(df, file_name, button_label, columns_to_export=None):
+    """Génère un bouton de téléchargement CSV pour un DataFrame."""
+    df_export = df.copy()
+    if columns_to_export:
+        df_export = df_export[columns_to_export]
+    
+    if 'Date' in df_export.columns:
+        if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
+            df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
+        df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
+    
+    csv_data = df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
+    
+    st.download_button(
+        label=button_label,
+        data=csv_data,
+        file_name=file_name,
+        mime="text/csv"
+    )
+
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
@@ -983,6 +994,7 @@ def main():
         
         # Réinitialisation de l'état de la session
         st.session_state['generation_reussie'] = False
+        st.session_state['df_planning'] = dataframes["Planning"]
         
         with st.spinner("Génération des deux menus en cours..."):
             try:
@@ -995,12 +1007,11 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=False
                 )
-                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(ideal_mode=False)
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
                 # Génération du menu idéal (sans décrémentation du stock)
-                # On doit re-créer une instance car le stock a été modifié dans la première génération
                 menu_generator_ideal = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1009,7 +1020,7 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=True
                 )
-                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu()
+                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu(ideal_mode=True)
                 st.session_state['df_menu_ideal'] = df_menu_ideal
                 st.session_state['liste_courses_ideal'] = liste_courses_ideal
                 
@@ -1024,87 +1035,127 @@ def main():
 
 
     if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
-        st.success("🎉 Menus générés avec succès !")
+        st.success("🎉 Menus générés avec succès ! Vous pouvez maintenant personnaliser votre sélection.")
 
-        tab_realiste, tab_ideal = st.tabs(["Menu Réaliste", "Menu Idéal"])
+        st.markdown("---")
+        st.header("2. Personnaliser le menu")
+        st.write("Pour chaque repas, choisissez entre l'option réaliste (qui tient compte de votre stock) et l'option idéale (meilleure recette selon les critères, sans restriction de stock).")
         
-        # --- Affichage dans l'onglet Menu Réaliste ---
-        with tab_realiste:
-            st.header("Menu Réaliste (avec décrémentation du stock)")
-            st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
-            st.dataframe(st.session_state['df_menu_realiste'])
+        df_planning = st.session_state['df_planning']
+        df_realiste = st.session_state['df_menu_realiste']
+        df_ideal = st.session_state['df_menu_ideal']
+        
+        # Initialisation de la sélection si elle n'existe pas encore
+        if 'selections_menu' not in st.session_state:
+            st.session_state['selections_menu'] = {}
+            for index, row in df_planning.iterrows():
+                key = f"{row['Date']}_{index}"
+                st.session_state['selections_menu'][key] = "Réaliste"
 
-            df_export_realiste = st.session_state['df_menu_realiste'].copy()
-            df_export_realiste = df_export_realiste.rename(columns={
-                'Participant(s)': 'Participant(s)',
-                COLONNE_NOM: 'Nom',
-                'Date': 'Date'
-            })
-            if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
-                df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
-            df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
-            df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
-            csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
+        menu_combine_data = []
+
+        # Affichage des sélecteurs pour chaque repas
+        for index, row in df_planning.iterrows():
+            date_repas = row['Date'].strftime('%d/%m/%Y %H:%M')
+            key = f"{row['Date']}_{index}"
             
-            st.download_button(
-                label="📥 Télécharger le menu RÉALISTE en CSV",
-                data=csv_data_realiste,
-                file_name="menu_realiste.csv",
-                mime="text/csv"
+            # Récupérer les options pour ce repas
+            recette_realiste = df_realiste.loc[index, COLONNE_NOM]
+            recette_ideal = df_ideal.loc[index, COLONNE_NOM]
+
+            options_dict = {
+                "Réaliste": recette_realiste,
+                "Idéal": recette_ideal
+            }
+            
+            selected_option = st.selectbox(
+                f"**Repas du {date_repas}** - Participants : {row['Participants']}",
+                options=list(options_dict.keys()),
+                index=list(options_dict.keys()).index(st.session_state['selections_menu'][key]),
+                key=f"selectbox_{key}",
+                format_func=lambda x: f"{x} : {options_dict[x]}"
             )
+            st.session_state['selections_menu'][key] = selected_option
+        
+        st.markdown("---")
+        if st.button("✅ Valider mes choix et générer les fichiers CSV"):
+            final_menu_list = []
+            final_liste_courses_dict = {}
             
-            st.subheader("Liste de Courses Détaillée pour le Menu Réaliste")
-            if st.session_state['liste_courses_realiste']:
-                liste_courses_df_realiste = pd.DataFrame(st.session_state['liste_courses_realiste'])
-                st.dataframe(liste_courses_df_realiste)
-                csv_realiste = liste_courses_df_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button(
-                    label="Télécharger la liste de courses RÉALISTE (CSV)",
-                    data=csv_realiste,
-                    file_name="liste_courses_realiste.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses réaliste.")
-
-        # --- Affichage dans l'onglet Menu Idéal ---
-        with tab_ideal:
-            st.header("Menu Idéal (sans décrémentation du stock)")
-            st.write("Ce menu a été généré en partant du principe que vous avez toujours tout en stock. Il n'est pas contraint par la consommation des jours précédents.")
-            st.dataframe(st.session_state['df_menu_ideal'])
-
-            df_export_ideal = st.session_state['df_menu_ideal'].copy()
-            df_export_ideal = df_export_ideal.rename(columns={
-                'Participant(s)': 'Participant(s)',
-                COLONNE_NOM: 'Nom',
-                'Date': 'Date'
-            })
-            if not pd.api.types.is_datetime64_any_dtype(df_export_ideal['Date']):
-                df_export_ideal['Date'] = pd.to_datetime(df_export_ideal['Date'], errors='coerce')
-            df_export_ideal['Date'] = df_export_ideal['Date'].dt.strftime('%Y-%m-%d %H:%M')
-            df_export_ideal = df_export_ideal[['Date', 'Participant(s)', 'Nom']]
-            csv_data_ideal = df_export_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
-            
-            st.download_button(
-                label="📥 Télécharger le menu IDÉAL en CSV",
-                data=csv_data_ideal,
-                file_name="menu_ideal.csv",
-                mime="text/csv"
+            # Recréation d'un RecetteManager avec le stock initial
+            recette_manager_final = RecetteManager(
+                dataframes["Recettes"],
+                dataframes["Ingredients"],
+                dataframes["Ingredients_recettes"]
             )
+
+            # Création du menu final et de la liste de courses combinée
+            for index, row in df_planning.iterrows():
+                date_repas = row['Date']
+                key = f"{date_repas}_{index}"
+                choix = st.session_state['selections_menu'][key]
+                
+                if choix == "Réaliste":
+                    menu_item = df_realiste.loc[index].to_dict()
+                else: # Choix "Idéal"
+                    menu_item = df_ideal.loc[index].to_dict()
+
+                final_menu_list.append(menu_item)
+                
+                # Calculer les ingrédients pour ce repas
+                recette_id = df_realiste.loc[index, 'Recette ID'] if choix == 'Réaliste' else df_ideal.loc[index, 'Recette ID']
+                participants_count = menu_generator_realiste.compter_participants(menu_item["Participant(s)"])
+                
+                ingredients_necessaires = recette_manager_final.calculer_quantite_necessaire(recette_id, participants_count)
+                
+                for ing_id, qte_necessaire in ingredients_necessaires.items():
+                    final_liste_courses_dict[ing_id] = final_liste_courses_dict.get(ing_id, 0) + qte_necessaire
+
+            df_menu_final = pd.DataFrame(final_menu_list)
             
-            st.subheader("Liste de Courses Détaillée pour le Menu Idéal")
-            if st.session_state['liste_courses_ideal']:
-                liste_courses_df_ideal = pd.DataFrame(st.session_state['liste_courses_ideal'])
-                st.dataframe(liste_courses_df_ideal)
-                csv_ideal = liste_courses_df_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button(
-                    label="Télécharger la liste de courses IDÉALE (CSV)",
-                    data=csv_ideal,
-                    file_name="liste_courses_ideal.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses idéale.")
+            # Génération de la liste de courses finale
+            liste_courses_finale_data = []
+            for ing_id, qte_totale_menu in final_liste_courses_dict.items():
+                nom_ing = recette_manager_final.obtenir_nom_ingredient_par_id(ing_id)
+                unite = recette_manager_final.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
+                qte_stock_initial = recette_manager_final.obtenir_qte_stock_initial_par_id(ing_id)
+                qte_acheter = max(0, qte_totale_menu - qte_stock_initial)
+                
+                liste_courses_finale_data.append({
+                    "Ingredient": f"{nom_ing} ({unite})",
+                    "Quantité totale du menu": f"{qte_totale_menu:.2f}",
+                    "Qte reste (initiale)": f"{qte_stock_initial:.2f}",
+                    "Quantité à acheter": f"{qte_acheter:.2f}"
+                })
+            
+            liste_courses_df_finale = pd.DataFrame(liste_courses_finale_data)
+            liste_courses_df_finale.sort_values("Ingredient", inplace=True)
+            
+            st.session_state['df_menu_final'] = df_menu_final
+            st.session_state['liste_courses_df_finale'] = liste_courses_df_finale
+            st.session_state['final_generation_reussie'] = True
+
+    if 'final_generation_reussie' in st.session_state and st.session_state['final_generation_reussie']:
+        st.markdown("---")
+        st.header("3. Votre Menu Personnalisé et la Liste de Courses")
+        
+        st.subheader("Menu Combiné")
+        st.dataframe(st.session_state['df_menu_final'])
+        create_download_button(
+            st.session_state['df_menu_final'],
+            "menu_personnalise.csv",
+            "📥 Télécharger le menu personnalisé en CSV",
+            columns_to_export=['Date', 'Participant(s)', COLONNE_NOM]
+        )
+
+        st.subheader("Liste de Courses Finale")
+        st.dataframe(st.session_state['liste_courses_df_finale'])
+        create_download_button(
+            st.session_state['liste_courses_df_finale'],
+            "liste_courses_finale.csv",
+            "📥 Télécharger la liste de courses finale en CSV"
+        )
+        
 
 
 if __name__ == "__main__":
