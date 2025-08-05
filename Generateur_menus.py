@@ -121,45 +121,41 @@ def extract_menus():
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
 # En-tête mis à jour pour la liste des ingrédients
-HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
+HDR_INGR = ["Page_ID", "Nom", "Type de stock", "unité", "Qte stock", "Qte menus"]
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
         pr=p["properties"]
 
-        # 1. Extraction de l'unité
+        # Extraction de l'unité
         u_prop = pr.get("unité",{})
+        unite = ""
         if u_prop.get("type")=="rich_text":
             unite="".join(t["plain_text"] for t in u_prop["rich_text"])
         elif u_prop.get("type")=="select":
             unite=(u_prop["select"] or {}).get("name","")
-        else:
-            unite=""
 
-        # 2. Extraction de la quantité en stock
+        # Extraction de la quantité en stock
         qte_stock_prop = pr.get("Qté stock", {})
         qte_stock = qte_stock_prop.get("number", 0) if qte_stock_prop.get("type") == "number" else 0
 
-        # 3. Extraction de la quantité utilisée dans les menus (agrégation/rollup)
+        # Extraction de la quantité utilisée dans les menus (rollup)
         qte_menus_prop = pr.get("Qte Menus", {})
         qte_menus = 0
         if qte_menus_prop.get("type") == "rollup":
             rollup_result = qte_menus_prop.get("rollup", {})
             if rollup_result.get("type") == "number":
                 qte_menus = rollup_result.get("number", 0)
-
-        # 4. Reconstitution de la formule pour Qté reste
-        qte_reste = max(0, qte_stock - qte_menus)
-
+        
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
             (pr["Type de stock"]["select"] or {}).get("name",""),
             unite,
-            qte_reste
+            qte_stock,
+            qte_menus
         ])
     return pd.DataFrame(rows,columns=HDR_INGR)
-
 
 HDR_IR = ["Page_ID","Qté/pers_s","Ingrédient ok","Type de stock f"]
 def extract_ingr_rec():
@@ -203,10 +199,10 @@ class RecetteManager:
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
 
         self.stock_simule = self.df_ingredients_initial.copy()
-        if "Qte reste" in self.stock_simule.columns:
-            self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
+        if "Qte stock" in self.stock_simule.columns:
+            self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte stock"], errors='coerce').fillna(0).astype(float)
         else:
-            logger.error("'Qte reste' manquante dans df_ingredients pour stock_simule.")
+            logger.error("'Qte stock' manquante dans df_ingredients pour stock_simule.")
             self.stock_simule["Qte reste"] = 0.0
 
         self.anti_gaspi_ingredients = self._trouver_ingredients_stock_eleve()
@@ -326,7 +322,7 @@ def generer_liste_de_courses(menu_genere, recettes_df, ingredients_df, rm, nb_pe
             ingredients_necessaires = rm.calculer_quantite_necessaire(recette_id_str, nb_personnes)
             for ing_id, qte_necessaire in ingredients_necessaires.items():
                 if ing_id not in liste_courses:
-                    liste_courses[ing_id] = {"qte_menus": 0, "nom": "", "unite": ""}
+                    liste_courses[ing_id] = {"qte_menus": 0, "nom": "", "unite": "", "qte_stock": 0}
                 liste_courses[ing_id]["qte_menus"] += qte_necessaire
 
     # 2. Récupérer le stock et calculer la quantité à acheter
@@ -336,8 +332,7 @@ def generer_liste_de_courses(menu_genere, recettes_df, ingredients_df, rm, nb_pe
         if ing_id in ingredients_df_indexed.index:
             nom_ingredient = ingredients_df_indexed.loc[ing_id, "Nom"]
             unite = ingredients_df_indexed.loc[ing_id, "unité"]
-            # La Qte stock est la Qte reste de l'ingrédient
-            qte_stock = float(ingredients_df_indexed.loc[ing_id, "Qte reste"])
+            qte_stock = float(ingredients_df_indexed.loc[ing_id, "Qte stock"])
             qte_menus = valeurs["qte_menus"]
             qte_a_acheter = max(0, qte_menus - qte_stock)
 
