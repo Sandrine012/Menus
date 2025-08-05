@@ -420,41 +420,34 @@ class MenuGenerator:
         """Trouve une recette transportable cuisinée dans les 2 jours précédents."""
         df_hist = self.menus_history_manager.df_menus_historique
         if df_hist.empty:
+            logger.debug("Historique des menus vide.")
             return None
-
+        
+        # Le bug était ici. Il faut un `timedelta` pour remonter le temps.
         deux_jours_avant = date_repas - timedelta(days=2)
         
-        # Filtrer l'historique pour les recettes des 2 derniers jours
-        recettes_recentes = df_hist[
-            (df_hist['Date'] >= deux_jours_avant) &
-            (df_hist['Date'] < date_repas) &
-            (df_hist['Recette'] != "Pas de recette")
-        ]
-
-        if recettes_recentes.empty:
-            logger.debug(f"Aucune recette récente transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}")
-            return None
-
-        # Reste à trouver les recettes transportables parmi celles-ci
-        recettes_candidates = []
-        for _, row in recettes_recentes.iterrows():
-            recette_id = row['Recette']
-            if self.recette_manager.est_transportable(recette_id):
-                if recette_id not in used_recipes_in_current_gen:
-                    recettes_candidates.append(recette_id)
+        recettes_candidates_ids = set()
+        for _, row in df_hist.iterrows():
+            if row['Date'] >= deux_jours_avant and row['Date'] < date_repas:
+                recette_id = str(row['Recette']).strip()
+                if self.recette_manager.est_transportable(recette_id):
+                    recettes_candidates_ids.add(recette_id)
         
-        if not recettes_candidates:
-            logger.debug(f"Aucune recette transportable trouvée parmi les repas récents pour le {date_repas.strftime('%Y-%m-%d')}")
+        # Filtre les recettes déjà utilisées dans la génération de menu actuelle
+        recettes_candidates_ids = list(recettes_candidates_ids - used_recipes_in_current_gen)
+
+        if not recettes_candidates_ids:
+            logger.debug(f"Aucune recette de reste transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}.")
             return None
 
-        recette_choisie_id = random.choice(recettes_candidates)
+        recette_choisie_id = random.choice(recettes_candidates_ids)
         logger.debug(f"Recette de reste transportable choisie : {self.recette_manager.obtenir_nom(recette_choisie_id)}")
         return recette_choisie_id
 
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str):
             return 1
-        if participants_str_codes == "B":
+        if participants_str_codes.strip().upper() == "B":
             return 1
         return len([p for p in participants_str_codes.replace(" ", "").split(",") if p])
 
@@ -520,7 +513,7 @@ class MenuGenerator:
             recettes_ingredients_manquants = {}
 
             # Logique spécifique pour les "Restes"
-            if participants.strip() == "B":
+            if participants.strip().upper() == "B":
                 recette_choisie_id = self.trouver_restes_transportables(date_repas, used_recipes)
                 if recette_choisie_id:
                     nom_recette = f"Restes : {self.recette_manager.obtenir_nom(recette_choisie_id)}"
@@ -631,17 +624,3 @@ if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
             except ValueError as ve:
                 st.error(f"Erreur de génération du menu : {ve}")
             except Exception as e:
-                st.error(f"Une erreur inattendue est survenue lors de la génération du menu : {e}")
-
-if 'menu_genere' in st.session_state and not st.session_state['menu_genere'].empty:
-    st.dataframe(st.session_state['menu_genere'], use_container_width=True)
-    
-    csv_file = st.session_state['menu_genere'].to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Télécharger le menu généré",
-        data=csv_file,
-        file_name='menu_genere.csv',
-        mime='text/csv'
-    )
-else:
-    st.info("Le menu généré s'affichera ici.")
