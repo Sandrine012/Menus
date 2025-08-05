@@ -541,7 +541,7 @@ with st.sidebar:
             try:
                 st.session_state['df_ingredients'] = extract_ingredients()
                 if uploaded_file_planning:
-                    st.session_state['df_planning'] = pd.read_csv(uploaded_file_planning)
+                    st.session_state['df_planning'] = pd.read_csv(uploaded_file_planning, sep=';')
                 if uploaded_file_recettes:
                     st.session_state['df_recipes'] = pd.read_csv(uploaded_file_recettes)
                 if uploaded_file_ingr_recettes:
