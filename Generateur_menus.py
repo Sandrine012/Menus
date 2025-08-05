@@ -187,7 +187,6 @@ class RecetteManager:
 
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
 
-        # Stock initial pour l'affichage final (ne change jamais)
         self.stock_initial = df_ingredients.copy()
         if "Qte reste" in self.stock_initial.columns:
             self.stock_initial["Qte reste"] = pd.to_numeric(self.stock_initial["Qte reste"], errors='coerce').fillna(0.0).astype(float)
@@ -195,10 +194,7 @@ class RecetteManager:
             logger.error("'Qte reste' manquante dans df_ingredients pour stock_initial.")
             self.stock_initial["Qte reste"] = 0.0
 
-        # Stock simulé pour la génération du menu (est décrémenté)
         self.stock_simule = self.stock_initial.copy()
-
-        # Indexer les deux DataFrames pour un accès plus rapide
         self.stock_initial = self.stock_initial.set_index(COLONNE_ID_INGREDIENT)
         self.stock_simule = self.stock_simule.set_index(COLONNE_ID_INGREDIENT)
 
@@ -219,7 +215,6 @@ class RecetteManager:
         seuil_gr = 100
         seuil_pc = 1
         ingredients_stock = {}
-        # Utilise le stock simulé pour la logique anti-gaspi car elle est basée sur l'état actuel
         if not all(col in self.stock_simule.columns for col in ["Qte reste", "unité", "Nom"]):
             logger.warning("Colonnes manquantes dans stock_simule pour _trouver_ingredients_stock_eleve.")
             return {}
@@ -276,7 +271,6 @@ class RecetteManager:
 
         for ing_id, qte_necessaire in ingredients_necessaires.items():
             ing_id_str = str(ing_id)
-            # Utilise le stock simulé pour évaluer la disponibilité
             if ing_id_str not in self.stock_simule.index:
                 qte_en_stock = 0.0
                 logger.debug(f"Ingrédient {ing_id_str} (recette {recette_id_str}) non trouvé dans stock_simule.")
@@ -345,7 +339,6 @@ class RecetteManager:
     def obtenir_nom_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            # Utilise le stock initial
             if ing_page_id_str in self.stock_initial.index:
                 return self.stock_initial.loc[ing_page_id_str, 'Nom']
             else:
@@ -358,7 +351,6 @@ class RecetteManager:
     def obtenir_unite_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            # Utilise le stock initial
             if ing_page_id_str in self.stock_initial.index:
                 return self.stock_initial.loc[ing_page_id_str, 'unité']
             else:
@@ -371,10 +363,6 @@ class RecetteManager:
     def obtenir_qte_stock_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            # 
-            # --- MODIFICATION CLÉ ---
-            #
-            # Utilisez le stock INITIAL pour la liste de courses
             qte_stock = self.stock_initial.loc[ing_page_id_str, 'Qte reste']
             return float(qte_stock)
         except (IndexError, KeyError, ValueError):
@@ -695,7 +683,6 @@ class MenuGenerator:
             manquants_recette = {}
 
             if "Recette" in row and pd.notna(row["Recette"]) and str(row["Recette"]).strip():
-                # Cas où une recette est pré-remplie
                 recette_choisie_id = str(row["Recette"])
                 if self.recette_manager.obtenir_nom(recette_choisie_id) is None:
                     recette_choisie_id = None
@@ -703,7 +690,6 @@ class MenuGenerator:
                 else:
                     self._log_decision_recette(recette_choisie_id, date_repas, participants_str)
             else:
-                # Logique de génération automatique
                 if "Repas" in row and str(row["Repas"]).lower() == "resto":
                     self._ajouter_resultat(resultats_menu, date_repas, "Restaurant", participants_str, "Menu restaurant", 0)
                     continue
@@ -718,21 +704,17 @@ class MenuGenerator:
                 )
             
             if recette_choisie_id:
-                # Ajout de la recette au menu généré
                 nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id)
                 used_recipes_in_current_gen.add(recette_choisie_id)
                 menu_recent_noms.insert(0, nom_recette)
                 menu_recent_noms = menu_recent_noms[:5]
 
-                # Mise à jour de la liste d'ingrédients cumulés
                 qte_necessaire = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count_int)
                 for ing_id, qte in qte_necessaire.items():
                     ingredients_menu_cumules[ing_id] = ingredients_menu_cumules.get(ing_id, 0) + qte
 
-                # Décrémentation du stock simulé
                 self.recette_manager.decrementer_stock(recette_choisie_id, participants_count_int, date_repas)
                 
-                # Ajout au résultat final
                 temps_total_int = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
                 remarques_recette = (
                     "Recette pré-remplie" if "Recette" in row and pd.notna(row["Recette"]) else
@@ -751,10 +733,6 @@ class MenuGenerator:
             nom_ingredient = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
             unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id)
             
-            # 
-            # --- MODIFICATION CLÉ ---
-            #
-            # Récupération du stock initial (non décrémenté) pour la liste de courses
             qte_stock_initial = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
             
             qte_a_acheter = max(0, qte_necessaire - qte_stock_initial)
@@ -763,7 +741,7 @@ class MenuGenerator:
                 liste_courses.append({
                     "Ingrédient": nom_ingredient,
                     "Quantité du menu": f"{qte_necessaire:.2f} {unite}",
-                    "Quantité stock": f"{qte_stock_initial:.2f} {unite}", # Utilisation du stock initial
+                    "Quantité stock": f"{qte_stock_initial:.2f} {unite}",
                     "Quantité à acheter": f"{qte_a_acheter:.2f} {unite}"
                 })
         return liste_courses
@@ -774,7 +752,7 @@ def main():
     st.title("Générateur de Menus Automatique")
 
     df_planning_data = {
-        "Date": [datetime.now() + timedelta(days=i) for i in range(7)],
+        "Date": [datetime.now() + timedelta(days=i) for i in range(8)], # <-- Modifié ici
         "Repas": ["Midi", "Soir"] * 4,
         "Participant(s)": ["P", "A,B"] * 4,
         "Recette": [None] * 8,
@@ -836,7 +814,6 @@ def main():
     if st.button("Générer le menu et la liste de courses"):
         with st.spinner("Génération en cours..."):
             try:
-                # 1. Extraction des données
                 df_recettes = extract_recettes()
                 verifier_colonnes(df_recettes, HDR_RECETTES, "Recettes")
 
@@ -849,7 +826,6 @@ def main():
                 df_ingr_rec = extract_ingr_rec()
                 verifier_colonnes(df_ingr_rec, HDR_IR, "Ingrédients/Recettes")
 
-                # 2. Instanciation et génération
                 menu_generator = MenuGenerator(
                     df_menus_hist, df_recettes, edited_df, df_ingredients, df_ingr_rec
                 )
