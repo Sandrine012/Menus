@@ -2,12 +2,12 @@ import pandas as pd
 import requests
 import json
 import random
-from IPython.display import display
-from ipywidgets import Button, VBox, Output
+import streamlit as st # Correction
 
 # ─── Clés d'authentification Notion ─────────────────────────────
 # IMPORTANT : Remplacez ces valeurs par vos propres clés et identifiants
 notion_api_key="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"
+
 # ─── IDs des bases de données Notion ────────────────────────────
 ID_INGREDIENTS = "b23b048b67334032ac1ae4e82d308817"
 ID_INGREDIENTS_RECETTES = "1d16fa46f8b2805b8377eba7bf668eb5"
@@ -52,7 +52,7 @@ def paginate(database_id, filter_prop=None):
 
         response = requests.post(url, headers=HEADERS, data=json.dumps(data))
         if response.status_code != 200:
-            print(f"Erreur lors de la requête Notion : {response.text}")
+            st.error(f"Erreur lors de la requête Notion : {response.text}")
             return
         
         response_json = response.json()
@@ -76,7 +76,7 @@ def extract_ingredients():
             
             rows.append([page_id, nom.strip(), unite.strip(), qte_reste])
     except Exception as e:
-        print(f"Erreur lors de la récupération des ingrédients depuis Notion : {e}")
+        st.error(f"Erreur lors de la récupération des ingrédients depuis Notion : {e}")
         return pd.DataFrame(columns=HDR_INGREDIENTS)
     return pd.DataFrame(rows, columns=HDR_INGREDIENTS)
 
@@ -93,7 +93,7 @@ def extract_recipes():
             url = pr["Url"]["url"] if pr["Url"]["url"] else ""
             rows.append([page_id, nom.strip(), frequence, url.strip()])
     except Exception as e:
-        print(f"Erreur lors de la récupération des recettes depuis Notion : {e}")
+        st.error(f"Erreur lors de la récupération des recettes depuis Notion : {e}")
         return pd.DataFrame(columns=HDR_RECETTES)
     return pd.DataFrame(rows, columns=HDR_RECETTES)
 
@@ -109,20 +109,19 @@ def extract_ingredients_recettes():
                 ingredient_id = pr["Ingredient"]["relation"][0]["id"]
                 rows.append([recette_id, ingredient_id])
     except Exception as e:
-        print(f"Erreur lors de la récupération des ingrédients des recettes depuis Notion : {e}")
+        st.error(f"Erreur lors de la récupération des ingrédients des recettes depuis Notion : {e}")
         return pd.DataFrame(columns=HDR_INGREDIENTS_RECETTES)
     return pd.DataFrame(rows, columns=HDR_INGREDIENTS_RECETTES)
 
 def load_all_data():
-    global df_ingredients, df_recipes, df_ingredients_recipes
-    print("Chargement des données depuis Notion...")
-    df_ingredients = extract_ingredients()
-    df_recipes = extract_recipes()
-    df_ingredients_recipes = extract_ingredients_recettes()
-    if not df_ingredients.empty and not df_recipes.empty and not df_ingredients_recipes.empty:
-        print("Données chargées avec succès.")
+    st.info("Chargement des données depuis Notion...")
+    st.session_state['df_ingredients'] = extract_ingredients()
+    st.session_state['df_recipes'] = extract_recipes()
+    st.session_state['df_ingredients_recipes'] = extract_ingredients_recettes()
+    if not st.session_state['df_ingredients'].empty and not st.session_state['df_recipes'].empty and not st.session_state['df_ingredients_recipes'].empty:
+        st.success("Données chargées avec succès.")
     else:
-        print("Erreur de chargement : Un ou plusieurs DataFrames sont vides.")
+        st.error("Erreur de chargement : Un ou plusieurs DataFrames sont vides.")
         
 def calculate_stock_score(df_recipes, df_ingredients, df_ingredients_recipes):
     stock_scores = {}
@@ -147,13 +146,14 @@ def calculate_stock_score(df_recipes, df_ingredients, df_ingredients_recipes):
     return df_recipes
 
 def generate_menu(
-    df_recipes,
-    df_ingredients,
-    df_ingredients_recipes,
     num_recettes=7,
     poids_frequence=0.5,
     poids_stock=0.5
 ):
+    df_recipes = st.session_state['df_recipes'].copy()
+    df_ingredients = st.session_state['df_ingredients'].copy()
+    df_ingredients_recipes = st.session_state['df_ingredients_recipes'].copy()
+    
     df_recipes = calculate_stock_score(df_recipes, df_ingredients, df_ingredients_recipes)
     
     # Normalisation des scores
@@ -190,44 +190,33 @@ def generate_menu(
         
     return selected_recipes
 
-# ─── Widgets interactifs pour l'interface ───────────────────────
-df_ingredients, df_recipes, df_ingredients_recipes = None, None, None
+# ─── Logique principale pour l'application Streamlit ───────────
+st.title("Générateur de menus")
 
-def on_load_data_button_clicked(b):
-    with output:
-        output.clear_output()
-        load_all_data()
-        
-def on_generate_menu_button_clicked(b):
-    with output:
-        output.clear_output()
-        if df_ingredients is None or df_recipes is None or df_ingredients_recipes is None:
-            print("Veuillez d'abord charger les données.")
-            return
-            
-        print("Génération du menu...")
-        menu = generate_menu(df_recipes.copy(), df_ingredients.copy(), df_ingredients_recipes.copy())
+if 'df_ingredients' not in st.session_state:
+    st.session_state['df_ingredients'] = None
+if 'df_recipes' not in st.session_state:
+    st.session_state['df_recipes'] = None
+if 'df_ingredients_recipes' not in st.session_state:
+    st.session_state['df_ingredients_recipes'] = None
+
+if st.button("1. Charger les données depuis Notion"):
+    load_all_data()
+
+if st.button("2. Générer le menu"):
+    if st.session_state['df_ingredients'] is None:
+        st.warning("Veuillez d'abord charger les données.")
+    else:
+        st.info("Génération du menu...")
+        menu = generate_menu()
         if not menu.empty:
-            display(menu[[COLONNE_NOM_RECETTE, COLONNE_POURCENTAGE_STOCK]])
-            print("Menu généré avec succès.")
+            st.write("### Menu généré avec succès")
+            st.dataframe(menu[[COLONNE_NOM_RECETTE, COLONNE_POURCENTAGE_STOCK]])
         else:
-            print("Aucune recette disponible pour la génération du menu.")
+            st.error("Aucune recette disponible pour la génération du menu.")
 
-def on_reset_variables_button_clicked(b):
-    global df_ingredients, df_recipes, df_ingredients_recipes
-    with output:
-        output.clear_output()
-        df_ingredients, df_recipes, df_ingredients_recipes = None, None, None
-        print("Variables réinitialisées. Veuillez recharger les données pour continuer.")
-
-load_data_button = Button(description="1. Charger les données")
-generate_menu_button = Button(description="2. Générer le menu")
-reset_variables_button = Button(description="3. Réinitialiser")
-
-load_data_button.on_click(on_load_data_button_clicked)
-generate_menu_button.on_click(on_generate_menu_button_clicked)
-reset_variables_button.on_click(on_reset_variables_button_clicked)
-
-output = Output()
-
-display(VBox([load_data_button, generate_menu_button, reset_variables_button, output]))
+if st.button("3. Réinitialiser les variables"):
+    st.session_state['df_ingredients'] = None
+    st.session_state['df_recipes'] = None
+    st.session_state['df_ingredients_recipes'] = None
+    st.success("Variables réinitialisées. Veuillez recharger les données pour continuer.")
