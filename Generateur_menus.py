@@ -3,9 +3,12 @@ import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
+import time, httpx
+from notion_client import Client
+from notion_client.errors import RequestTimeoutError, APIResponseError
 
+# ────── CONFIGURATION INITIALE ──────────────────────────────────
 # Configuration du logger pour Streamlit
-# Niveau DEBUG pour voir les détails de filtrage
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,64 @@ VALEUR_DEFAUT_TEMPS_PREPARATION = 10
 TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
+
+# ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
+# Ces lignes sont ajoutées depuis Generateur.py
+NOTION_API_KEY           = st.secrets["notion_api_key"]
+ID_MENUS                 = st.secrets["notion_database_id_menus"]
+BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
+
+notion = Client(auth=NOTION_API_KEY)
+
+# ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
+# Ces fonctions sont copiées depuis Generateur.py
+def paginate(db_id, **kwargs):
+    out, cur, retry = [], None, 0
+    while True:
+        try:
+            resp = notion.databases.query(database_id=db_id,
+                                          start_cursor=cur,
+                                          page_size=BATCH_SIZE,
+                                          **kwargs)
+            out.extend(resp["results"])
+            if not resp["has_more"]:
+                break
+            cur = resp["next_cursor"]
+            time.sleep(0.3)
+            retry = 0
+        except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout):
+            retry += 1
+            if retry > MAX_RETRY:
+                st.error("Timeout répété – arrêt.")
+                break
+            time.sleep(WAIT_S * retry)
+        except APIResponseError as e:
+            st.error(f"Erreur API : {e}")
+            break
+    return out
+
+HDR_MENUS = ["Nom Menu","Recette","Date"]
+def extract_menus():
+    rows=[]
+    for p in paginate(ID_MENUS,
+            filter={"property":"Recette","relation":{"is_not_empty":True}}):
+        pr = p["properties"]
+        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
+        rec_ids=[]
+        rel=pr["Recette"]
+        if rel["type"]=="relation":
+            rec_ids=[r["id"] for r in rel["relation"]]
+        else:
+            for it in rel["rollup"]["array"]:
+                rec_ids.extend([it.get("id")] if it.get("id") else
+                               [r["id"] for r in it.get("relation",[])])
+        d=""
+        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
+            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
+        rows.append([nom.strip(), ", ".join(rec_ids), d])
+    return pd.DataFrame(rows,columns=HDR_MENUS)
+# ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
+
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
@@ -707,7 +768,7 @@ def main():
     st.markdown("---")
 
     st.sidebar.header("Chargement des fichiers CSV")
-    st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
+    st.sidebar.info("Veuillez charger les fichiers CSV nécessaires.")
 
     uploaded_files = {}
     
@@ -730,11 +791,12 @@ def main():
         type="csv", 
         key="Planning.csv"
     )
-    uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
-        "Uploader Menus.csv (historique de vos menus)", 
-        type="csv", 
-        key="Menus.csv"
-    )
+    # L'uploader pour Menus.csv est commenté pour ne plus le charger
+    # uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
+    #     "Uploader Menus.csv (historique de vos menus)", 
+    #     type="csv", 
+    #     key="Menus.csv"
+    # )
     uploaded_files["Ingredients.csv"] = st.sidebar.file_uploader(
         "Uploader Ingredients.csv (liste de vos ingrédients et stock)", 
         type="csv", 
@@ -742,13 +804,20 @@ def main():
     )
 
     dataframes = {}
-    all_files_uploaded = True
+    # On vérifie que les 4 fichiers nécessaires (hors Menus.csv) sont présents
+    required_files = ["Recettes.csv", "Ingredients_recettes.csv", "Planning.csv", "Ingredients.csv"]
+    all_files_uploaded = all(uploaded_files.get(f) is not None for f in required_files)
+    
+    if not all_files_uploaded:
+        st.warning("Veuillez charger tous les fichiers CSV nécessaires (Recettes, Ingredients_recettes, Planning, Ingredients) pour continuer.")
+        return
+
+    # Chargement des fichiers uploadés
     for file_name, uploaded_file in uploaded_files.items():
         if uploaded_file is not None:
             try:
                 if file_name == "Planning.csv":
                     uploaded_file.seek(0)
-                    # Lire Planning.csv avec parsing de la date, délimiteur ';' et dayfirst=True pour le bon format français
                     df = pd.read_csv(
                         uploaded_file,
                         encoding='utf-8',
@@ -759,28 +828,31 @@ def main():
                 else:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
                 
-                # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
                 if "Temps_total" in df.columns:
                     df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
                 if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce') # Garder en float pour comparaison
+                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
                 if "Proteines" in df.columns:
                     df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
-
 
                 dataframes[file_name.replace(".csv", "")] = df
                 st.sidebar.success(f"{file_name} chargé avec succès.")
             except Exception as e:
                 st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                all_files_uploaded = False
-                break
-        else:
-            all_files_uploaded = False
-            break
+                return # Arrêter l'exécution si un fichier a une erreur de chargement
 
-    if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV pour continuer.")
-        return
+    # Chargement des menus à partir de Notion via la nouvelle fonction
+    with st.spinner("Chargement de l'historique des menus depuis Notion..."):
+        try:
+            df_menus_from_notion = extract_menus()
+            dataframes["Menus"] = df_menus_from_notion
+            st.sidebar.success("Historique des menus chargé depuis Notion avec succès.")
+            if df_menus_from_notion.empty:
+                 st.sidebar.warning("Aucun historique de menu trouvé sur Notion.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors de la récupération de l'historique des menus depuis Notion : {e}")
+            return
+
 
     # Vérification des colonnes essentielles après le chargement
     try:
@@ -816,29 +888,22 @@ def main():
                 st.header("2. Menu Généré")
                 st.dataframe(df_menu_genere)
 
-                # Ajuste l'ordre et les noms des colonnes pour correspondre exactement à l’exemple CSV
                 df_export = df_menu_genere.copy()
                 
-                # Renomme ou crée les colonnes "Nom" et "Participant(s)" si nécessaire selon ton DF actuel
-                # Ici on s’assure d’avoir la bonne casse et noms
                 df_export = df_export.rename(columns={
-                    'Participant(s)': 'Participant(s)',  # adapte si tu as un nom différent
+                    'Participant(s)': 'Participant(s)',
                     COLONNE_NOM: 'Nom',
                     'Date': 'Date'
                 })
                 
-                # Si besoin, convertit la colonne Date au format "yyyy-mm-dd HH:MM"
                 if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
                     df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
                 df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
                 
-                # Filtrer les colonnes pour n’avoir que celles-ci, dans cet ordre
                 df_export = df_export[['Date', 'Participant(s)', 'Nom']]
                 
-                # Génére la chaîne CSV avec séparateur virgule, BOM UTF-8 (si nécessaire)
                 csv_data = df_export.to_csv(index=False, sep=',', encoding='utf-8-sig')
                 
-                # Bouton de téléchargement Streamlit (à placer dans ta plage de code UI)
                 st.download_button(
                     label="📥 Télécharger le menu en CSV",
                     data=csv_data,
@@ -846,10 +911,8 @@ def main():
                     mime="text/csv"
                 )
 
-
                 st.header("3. Liste de Courses (Ingrédients manquants cumulés)")
                 if liste_courses:
-                    # Convertir la liste de courses formatée en un DataFrame pour l'affichage et l'export
                     liste_courses_df = pd.DataFrame({"Ingrédient et Quantité": liste_courses})
                     st.dataframe(liste_courses_df)
 
