@@ -567,12 +567,6 @@ with st.sidebar:
         st.session_state.clear()
         st.success("Toutes les variables de session ont été réinitialisées.")
 
-# Affichage du planning et du menu généré
-st.header("Planning de la semaine")
-if 'df_planning' in st.session_state and st.session_state['df_planning'] is not None:
-    st.dataframe(st.session_state['df_planning'], use_container_width=True)
-else:
-    st.info("Chargez un fichier de planning pour l'afficher ici.")
 
 st.header("Menu Généré")
 if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
