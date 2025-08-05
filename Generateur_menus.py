@@ -754,7 +754,7 @@ class MenuGenerator:
         # Convertir la liste de courses en un format plus simple pour le retour
         formatted_liste_courses = []
         for ing, qte_unite in liste_courses_final.items():
-        formatted_liste_courses.append(f"{ing}: {qte_unite}")
+            formatted_liste_courses.append(f"{ing}: {qte_unite}")
         formatted_liste_courses.sort() # Tri alphabétique
 
         return df_menu_genere, formatted_liste_courses
