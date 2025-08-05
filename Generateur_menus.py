@@ -3,9 +3,12 @@ import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
+import time, httpx
+from notion_client import Client
+from notion_client.errors import RequestTimeoutError, APIResponseError
 
+# ────── CONFIGURATION INITIALE ──────────────────────────────────
 # Configuration du logger pour Streamlit
-# Niveau DEBUG pour voir les détails de filtrage
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,64 @@ VALEUR_DEFAUT_TEMPS_PREPARATION = 10
 TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
+
+# ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
+# Ces lignes sont ajoutées depuis Generateur.py
+NOTION_API_KEY           = st.secrets["notion_api_key"]
+ID_MENUS                 = st.secrets["notion_database_id_menus"]
+BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
+
+notion = Client(auth=NOTION_API_KEY)
+
+# ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
+# Ces fonctions sont copiées depuis Generateur.py
+def paginate(db_id, **kwargs):
+    out, cur, retry = [], None, 0
+    while True:
+        try:
+            resp = notion.databases.query(database_id=db_id,
+                                          start_cursor=cur,
+                                          page_size=BATCH_SIZE,
+                                          **kwargs)
+            out.extend(resp["results"])
+            if not resp["has_more"]:
+                break
+            cur = resp["next_cursor"]
+            time.sleep(0.3)
+            retry = 0
+        except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout):
+            retry += 1
+            if retry > MAX_RETRY:
+                st.error("Timeout répété – arrêt.")
+                break
+            time.sleep(WAIT_S * retry)
+        except APIResponseError as e:
+            st.error(f"Erreur API : {e}")
+            break
+    return out
+
+HDR_MENUS = ["Nom Menu","Recette","Date"]
+def extract_menus():
+    rows=[]
+    for p in paginate(ID_MENUS,
+            filter={"property":"Recette","relation":{"is_not_empty":True}}):
+        pr = p["properties"]
+        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
+        rec_ids=[]
+        rel=pr["Recette"]
+        if rel["type"]=="relation":
+            rec_ids=[r["id"] for r in rel["relation"]]
+        else:
+            for it in rel["rollup"]["array"]:
+                rec_ids.extend([it.get("id")] if it.get("id") else
+                               [r["id"] for r in it.get("relation",[])])
+        d=""
+        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
+            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
+        rows.append([nom.strip(), ", ".join(rec_ids), d])
+    return pd.DataFrame(rows,columns=HDR_MENUS)
+# ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
+
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
@@ -331,52 +392,14 @@ class MenuGenerator:
             if is_recent:
                 logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Est récente (dans les {NB_JOURS_ANTI_REPETITION} jours)")
             return is_recent
+
         except Exception as e:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
-    def trouver_restes_transportables(self, date_repas, used_recipes_in_current_gen):
-        """Trouve une recette transportable cuisinée dans les 2 jours précédents."""
-        df_hist = self.menus_history_manager.df_menus_historique
-        if df_hist.empty:
-            logger.debug("Historique des menus vide.")
-            return None
-        
-        deux_jours_avant = date_repas - timedelta(days=2)
-        
-        recettes_candidates_ids = set()
-        
-        recent_menus = df_hist[
-            (df_hist['Date'] >= deux_jours_avant) &
-            (df_hist['Date'] < date_repas) &
-            df_hist['Recette'].notna()
-        ]
-
-        if recent_menus.empty:
-            logger.debug(f"Aucune recette récente transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}")
-            return None
-            
-        for recette_id in recent_menus['Recette'].unique():
-            recette_id_str = str(recette_id).strip()
-            if self.recette_manager.est_transportable(recette_id_str):
-                recettes_candidates_ids.add(recette_id_str)
-        
-        recettes_candidates_ids = list(recettes_candidates_ids - used_recipes_in_current_gen)
-
-        if not recettes_candidates_ids:
-            logger.debug(f"Aucune recette de reste transportable trouvée parmi les repas récents pour le {date_repas.strftime('%Y-%m-%d')}.")
-            return None
-
-        recette_choisie_id = random.choice(recettes_candidates_ids)
-        logger.debug(f"Recette de reste transportable choisie : {self.recette_manager.obtenir_nom(recette_choisie_id)}")
-        return recette_choisie_id
-
-
     def compter_participants(self, participants_str_codes):
-        if not isinstance(participants_str_codes, str):
-            return 1
-        if participants_str_codes.strip().upper() == "B":
-            return 1
+        if not isinstance(participants_str_codes, str): return 1
+        if participants_str_codes == "B": return 1
         return len([p for p in participants_str_codes.replace(" ", "").split(",") if p])
 
     def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
@@ -387,13 +410,18 @@ class MenuGenerator:
         anti_gaspi_candidates = []
         recettes_scores_dispo = {}
         recettes_ingredients_manquants = {}
+
         nb_personnes = self.compter_participants(participants_str_codes)
+
         logger.debug(f"--- Recherche de candidats pour {date_repas.strftime('%Y-%m-%d %H:%M')} (Participants: {participants_str_codes}) ---")
+
         for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
             nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
+
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
                 continue
+
             temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
             if temps_req == "express" and temps_total > TEMPS_MAX_EXPRESS:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({TEMPS_MAX_EXPRESS} min).")
@@ -401,232 +429,509 @@ class MenuGenerator:
             if temps_req == "rapide" and temps_total > TEMPS_MAX_RAPIDE:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({TEMPS_MAX_RAPIDE} min).")
                 continue
+
             if recette_id_str_cand in used_recipes_in_current_gen:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Déjà utilisé dans la génération actuelle.")
                 continue
+            
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
+                # Le log spécifique est déjà dans est_adaptee_aux_participants
                 continue
             
-            score_dispo, pourcentage_dispo, ingredients_manquants = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
-            
+            if self.est_recente(recette_id_str_cand, date_repas):
+                # Le log spécifique est déjà dans est_recente
+                continue
+
+            if nutrition_req == "equilibré":
+                try:
+                    if self.recette_manager.df_recettes.index.name == COLONNE_ID_RECETTE:
+                        calories = float(self.recette_manager.df_recettes.loc[recette_id_str_cand, "Calories"])
+                    else:
+                        calories = float(self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_id_str_cand]["Calories"].iloc[0])
+                    if calories > REPAS_EQUILIBRE:
+                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({REPAS_EQUILIBRE}).")
+                        continue
+                except (KeyError, ValueError, TypeError, IndexError):
+                    logger.debug(f"Calories non valides/trouvées pour {nom_recette_cand} ({recette_id_str_cand}) (filtre nutrition).")
+                    continue
+
+            score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
             recettes_scores_dispo[recette_id_str_cand] = score_dispo
-            recettes_ingredients_manquants[recette_id_str_cand] = ingredients_manquants
-
-            is_anti_gaspi = self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand)
-            if is_anti_gaspi:
-                anti_gaspi_candidates.append(recette_id_str_cand)
-                
+            recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
             candidates.append(recette_id_str_cand)
-            
-        return candidates, anti_gaspi_candidates, recettes_scores_dispo, recettes_ingredients_manquants
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) ajouté: Score dispo {score_dispo:.2f}, {pourcentage_dispo:.0f}% d'ingrédients. Manquants: {len(manquants_pour_cette_recette)}")
 
-    def generer_menu_planifie(self, df_recettes, df_ingredients_recettes):
-        planning_genere = []
-        used_recipes = set()
+            if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand):
+                anti_gaspi_candidates.append(recette_id_str_cand)
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) est aussi anti-gaspi.")
+
+
+        if not candidates:
+            logger.debug("Aucun candidat trouvé après le filtrage initial.")
+            return [], {}
+
+        candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+        anti_gaspi_triees = sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+
+        if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
+            logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_triees[0], -1):.2f}).")
+            return anti_gaspi_triees[:5], recettes_ingredients_manquants
         
-        df_menus_hist = st.session_state.get('df_menus_hist', pd.DataFrame(columns=["Nom Menu","Recette","Date"]))
-        df_ingredients = st.session_state.get('df_ingredients')
+        logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats généraux.")
+        return candidates_triees[:10], recettes_ingredients_manquants
 
-        recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
-        menus_history_manager = MenusHistoryManager(df_menus_hist)
-        
-        for index, row in self.df_planning.iterrows():
-            date_repas = row["Date"]
-            participants = row.get("Participants", "")
-            type_repas = row.get("Type_de_repas", "")
-            
-            recette_choisie_id = "Pas de recette"
-            nom_recette = "Pas de recette"
-            recettes_scores_dispo = {}
-            recettes_ingredients_manquants = {}
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
+        logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
+        recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
+            date_repas, participants_str_codes, used_recipes_current_gen_set,
+            transportable_req_str, temps_req_str, nutrition_req_str
+        )
+        if not recettes_candidates_initiales:
+            logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
+            return None, {}
 
-            if participants.strip().upper() == "B":
-                recette_choisie_id = self.trouver_restes_transportables(date_repas, used_recipes)
-                if recette_choisie_id:
-                    nom_recette = f"Restes : {self.recette_manager.obtenir_nom(recette_choisie_id)}"
-                    used_recipes.add(recette_choisie_id)
+        recettes_historiques_semaine_set = self.recettes_meme_semaine_annees_precedentes(date_repas)
+        scores_candidats_dispo = {
+            r_id: self.recette_manager.evaluer_disponibilite_et_manquants(r_id, participants_count_int)[0]
+            for r_id in recettes_candidates_initiales
+        }
+        preferred_candidates_list = [r_id for r_id in recettes_candidates_initiales if r_id in recettes_historiques_semaine_set]
+        if preferred_candidates_list:
+            logger.debug(f"{len(preferred_candidates_list)} candidats préférés (historique semaine précédente) trouvés.")
+
+        mots_cles_exclus_set = set()
+        if menu_recent_noms_list:
+            for nom_plat_recent in menu_recent_noms_list:
+                if isinstance(nom_plat_recent, str) and nom_plat_recent.strip():
+                    try: mots_cles_exclus_set.add(nom_plat_recent.lower().split()[0])
+                    except IndexError: pass
+        if mots_cles_exclus_set:
+            logger.debug(f"Mots clés exclus pour anti-répétition (génération actuelle): {mots_cles_exclus_set}")
+
+        def get_first_word_local(recette_id_str_func):
+            nom = self.recette_manager.obtenir_nom(recette_id_str_func)
+            return nom.lower().split()[0] if nom and nom.strip() and "Recette_ID_" not in nom else ""
+
+        recette_choisie_final = None
+        if preferred_candidates_list:
+            preferred_valides_motcle = []
+            for r_id in preferred_candidates_list:
+                first_word = get_first_word_local(r_id)
+                if first_word not in mots_cles_exclus_set:
+                    preferred_valides_motcle.append(r_id)
                 else:
-                    nom_recette = "Pas de restes transportables récents"
+                    logger.debug(f"Candidat préféré {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
+
+            if preferred_valides_motcle:
+                recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                logger.debug(f"Recette choisie parmi les préférées valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             else:
-                recettes_candidates, anti_gaspi_candidates, recettes_scores_dispo, recettes_ingredients_manquants = self.generer_recettes_candidates(
-                    date_repas,
-                    participants,
-                    used_recipes,
-                    row.get("Transportable", ""),
-                    row.get("Temps", ""),
-                    row.get("Nutrition", "")
-                )
-                
-                if anti_gaspi_candidates:
-                    recette_choisie_id = random.choice(anti_gaspi_candidates)
-                elif recettes_candidates:
-                    recette_choisie_id = random.choice(recettes_candidates)
-                
-                if recette_choisie_id != "Pas de recette":
-                    used_recipes.add(recette_choisie_id)
-                    self.recette_manager.decrementer_stock(recette_choisie_id, self.compter_participants(participants), date_repas)
-                
-                nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id) if recette_choisie_id != "Pas de recette" else "Pas de recette"
-            
-            planning_genere.append({
-                "Date": date_repas,
-                "Type_de_repas": type_repas,
-                "Recette": nom_recette,
-                "Recette_ID": recette_choisie_id,
-                "Score_Disponibilite": recettes_scores_dispo.get(recette_choisie_id, 0),
-                "Ingredients_manquants": recettes_ingredients_manquants.get(recette_choisie_id, {})
-            })
+                recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).") # Fallback, should ideally not happen if filtering is strict
 
-        return pd.DataFrame(planning_genere)
-
-
-# ────── LOGIQUE PRINCIPALE DE L'APPLICATION STREAMLIT ───────────
-st.set_page_config(layout="wide")
-st.title("Générateur de Menus Automatisé")
-
-# Initialisation de st.session_state
-if 'df_menus_hist' not in st.session_state:
-    st.session_state['df_menus_hist'] = None
-if 'df_recipes' not in st.session_state:
-    st.session_state['df_recipes'] = None
-if 'df_ingredients_recipes' not in st.session_state:
-    st.session_state['df_ingredients_recipes'] = None
-if 'df_ingredients' not in st.session_state:
-    st.session_state['df_ingredients'] = None
-if 'df_planning' not in st.session_state:
-    st.session_state['df_planning'] = None
-
-with st.sidebar:
-    st.header("Chargement des données")
-    uploaded_file_planning = st.file_uploader("1. Charger le planning (Planning.csv)", type="csv")
-    uploaded_file_recettes = st.file_uploader("2. Charger les recettes (Recettes.csv)", type="csv")
-    uploaded_file_ingr_recettes = st.file_uploader("3. Charger les ingrédients des recettes (Ingredients_recettes.csv)", type="csv")
-
-    if st.button("Charger dans Notion"):
-        with st.spinner("Chargement en cours..."):
-            try:
-                # Ajout des dépendances manquantes pour le code d'origine
-                from notion_client import Client
-                from notion_client.errors import RequestTimeoutError, APIResponseError
-                import time, httpx
-                
-                NOTION_API_KEY           = st.secrets["notion_api_key"]
-                ID_MENUS                 = st.secrets["notion_database_id_menus"]
-                ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
-                BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
-
-                notion = Client(auth=NOTION_API_KEY)
-
-                def paginate(db_id, **kwargs):
-                    out, cur, retry = [], None, 0
-                    while True:
-                        try:
-                            resp = notion.databases.query(database_id=db_id,
-                                                        start_cursor=cur,
-                                                        page_size=BATCH_SIZE,
-                                                        **kwargs)
-                            out.extend(resp["results"])
-                            if not resp["has_more"]:
-                                break
-                            cur = resp["next_cursor"]
-                            time.sleep(0.3)
-                            retry = 0
-                        except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout):
-                            retry += 1
-                            if retry > MAX_RETRY:
-                                st.error("Timeout répété – arrêt.")
-                                break
-                            time.sleep(WAIT_S * retry)
-                        except APIResponseError as e:
-                            st.error(f"Erreur API : {e}")
-                            break
-                    return out
-
-                HDR_MENUS = ["Nom Menu","Recette","Date"]
-                def extract_menus():
-                    rows=[]
-                    for p in paginate(ID_MENUS,
-                            filter={"property":"Recette","relation":{"is_not_empty":True}}):
-                        pr = p["properties"]
-                        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
-                        rec_ids=[]
-                        rel=pr["Recette"]
-                        if rel["type"]=="relation":
-                            rec_ids=[r["id"] for r in rel["relation"]]
-                        else:
-                            for it in rel["rollup"]["array"]:
-                                rec_ids.extend([it.get("id")] if it.get("id") else
-                                            [r["id"] for r in it.get("relation",[])])
-                        d=""
-                        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
-                            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
-                        rows.append([nom.strip(), ", ".join(rec_ids), d])
-                    return pd.DataFrame(rows,columns=HDR_MENUS)
-
-                HDR_INGREDIENTS = [COLONNE_ID_INGREDIENT, "Nom", "unité", "Qte reste"]
-                def extract_ingredients():
-                    rows = []
-                    for p in paginate(ID_INGREDIENTS):
-                        pr = p["properties"]
-                        page_id = p["id"]
-                        nom = "".join(t["plain_text"] for t in pr["Nom"]["title"])
-                        unite = pr["unité"]["select"]["name"] if pr["unité"]["select"] else ""
-                        qte_reste = pr["Qte reste"]["number"] if pr["Qte reste"] and "number" in pr["Qte reste"] and pr["Qte reste"]["number"] is not None else 0
-                        rows.append([page_id, nom.strip(), unite.strip(), qte_reste])
-                    return pd.DataFrame(rows, columns=HDR_INGREDIENTS)
-
-                st.session_state['df_ingredients'] = extract_ingredients()
-                if uploaded_file_planning:
-                    st.session_state['df_planning'] = pd.read_csv(uploaded_file_planning, sep=';')
-                if uploaded_file_recettes:
-                    st.session_state['df_recipes'] = pd.read_csv(uploaded_file_recettes)
-                if uploaded_file_ingr_recettes:
-                    st.session_state['df_ingredients_recipes'] = pd.read_csv(uploaded_file_ingr_recettes)
-                
-                st.session_state['df_menus_hist'] = extract_menus()
-                
-                if (st.session_state['df_ingredients'] is not None and not st.session_state['df_ingredients'].empty and
-                    st.session_state['df_planning'] is not None and not st.session_state['df_planning'].empty and
-                    st.session_state['df_recipes'] is not None and not st.session_state['df_recipes'].empty and
-                    st.session_state['df_ingredients_recipes'] is not None and not st.session_state['df_ingredients_recipes'].empty):
-                    st.success("Toutes les données sont chargées avec succès.")
-                    st.session_state['data_loaded'] = True
+        if not recette_choisie_final:
+            candidates_valides_motcle = []
+            for r_id in recettes_candidates_initiales:
+                first_word = get_first_word_local(r_id)
+                if first_word not in mots_cles_exclus_set:
+                    candidates_valides_motcle.append(r_id)
                 else:
-                    st.error("Veuillez charger tous les fichiers CSV et vérifier la connexion Notion.")
-                    st.session_state['data_loaded'] = False
-            except Exception as e:
-                st.error(f"Une erreur est survenue lors du chargement : {e}")
-                st.session_state['data_loaded'] = False
+                    logger.debug(f"Candidat général {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
 
-st.header("Menu Généré")
-if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
-    if st.button("Générer le menu"):
-        with st.spinner("Génération du menu en cours..."):
-            try:
-                generator = MenuGenerator(
-                    st.session_state['df_menus_hist'],
-                    st.session_state['df_recipes'],
-                    st.session_state['df_planning'],
-                    st.session_state['df_ingredients'],
-                    st.session_state['df_ingredients_recipes']
+            if candidates_valides_motcle:
+                recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
+            elif recettes_candidates_initiales:
+                recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).") # Fallback
+
+        if recette_choisie_final:
+            logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
+            return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
+        logger.debug(f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
+        return None, {}
+
+    def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
+        if recette_id_str is not None:
+            nom_recette = self.recette_manager.obtenir_nom(recette_id_str)
+            adaptee = self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes) # This also logs
+            temps_prep = self.recette_manager.obtenir_temps_preparation(recette_id_str)
+            logger.debug(f"Décision rec {recette_id_str} ({nom_recette}): Adaptée={adaptee}, Temps={temps_prep} min")
+        else:
+            logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
+
+    def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
+        info_stock_str = ""
+        if recette_id_str_pour_eval:
+            score_dispo, pourcentage_dispo, _ = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_pour_eval, self.compter_participants(participants_str_codes))
+            info_stock_str = f"Stock: {pourcentage_dispo:.0f}% des ingrédients disponibles (score: {score_dispo:.2f})"
+
+        remarques_finales = f"{remarques_str} {info_stock_str}".strip()
+        resultats_liste.append({
+            "Date": date_repas.strftime("%d/%m/%Y %H:%M"),
+            COLONNE_NOM: nom_menu_str,
+            "Participant(s)": participants_str_codes,
+            "Remarques spécifiques": remarques_finales,
+            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
+        })
+
+    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
+        candidats_restes_ids = []
+        # Tri par date, le plus ancien en premier, ce qui est logique pour les restes
+        sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
+
+        logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
+        if not sorted_plats_transportables:
+            logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
+            
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
+            # Correction sécurité : s'assurer que date_plat_orig est bien un datetime
+            if isinstance(date_plat_orig, str):
+                date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
+            
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
+            nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
+            
+            logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
+
+            if not (0 < jours_ecoules <= 2): # Condition: planifié dans les 2 jours précédents
+                logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
+                continue
+            if plat_id_orig_str in repas_b_utilises_ids_list:
+                logger.debug(f"Reste {nom_plat_reste} filtré: Déjà utilisé pour un repas B.")
+                continue
+            if not (nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste):
+                logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
+                continue
+            
+            # Vérification explicite que la recette d'origine est marquée comme transportable
+            if not self.recette_manager.est_transportable(plat_id_orig_str): # Condition: transportable est 'oui'
+                logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
+                continue
+
+            # ANCIENNE LOGIQUE D'ANTI-RÉPÉTITION, RETIRÉE POUR LES RESTES :
+            # premier_mot_reste = nom_plat_reste.lower().split()[0]
+            # mots_cles_recents_set = set()
+            # if menu_recent_noms_list:
+            #      for nom_plat_r in menu_recent_noms_list:
+            #         if isinstance(nom_plat_r, str) and nom_plat_r.strip():
+            #             try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
+            #             except IndexError: pass
+            # if premier_mot_reste not in mots_cles_recents_set:
+            #     candidats_restes_ids.append(plat_id_orig_str)
+            #     logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
+            
+            # Nouvelle logique : Tous les restes valides sont ajoutés si les conditions précédentes sont respectées.
+            candidats_restes_ids.append(plat_id_orig_str)
+            logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes (pas de filtrage anti-répétition pour les restes).")
+
+
+        if candidats_restes_ids:
+            plat_id_choisi_str = candidats_restes_ids[0] # Choisit le reste transportable le plus ancien et valide
+            nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
+            repas_b_utilises_ids_list.append(plat_id_choisi_str)
+            logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
+            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
+
+        logger.info("Pas de reste disponible trouvé pour ce Repas B.")
+        return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
+
+
+    def generer_menu(self):
+        resultats_df_list = []
+        repas_b_utilises_ids = []
+        plats_transportables_semaine = {} # Réinitialisé à chaque génération
+        used_recipes_current_generation_set = set() # Pour éviter les doublons dans la même génération
+        menu_recent_noms = [] # Pour la logique d'anti-répétition des premiers mots
+        ingredients_effectivement_utilises_ids_set = set() # Non utilisé pour la liste de courses finale, mais pour le suivi
+        self.ingredients_a_acheter_cumules = {}
+
+        for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
+            date_repas_dt = repas_planning_row["Date"]
+            participants_str = str(repas_planning_row["Participants"])
+            participants_count = self.compter_participants(participants_str)
+            transportable_req = str(repas_planning_row.get("Transportable", "")).strip().lower()
+            temps_req = str(repas_planning_row.get("Temps", "")).strip().lower()
+            nutrition_req = str(repas_planning_row.get("Nutrition", "")).strip().lower()
+
+            logger.info(f"\n--- Traitement Planning: {date_repas_dt.strftime('%d/%m/%Y %H:%M')} - Participants: {participants_str} ---")
+
+            recette_choisie_id = None
+            nom_plat_final = "Erreur - Plat non défini"
+            remarques_repas = ""
+            temps_prep_final = 0
+            ingredients_consommes_ce_repas = []
+            ingredients_manquants_pour_recette_choisie = {}
+
+            if participants_str == "B":
+                # Only consider meals that were *explicitly marked* as transportable in the planning
+                # and subsequently chosen for a standard meal.
+                nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
+                    date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
                 )
-                menu_genere = generator.generer_menu_planifie(st.session_state['df_recipes'], st.session_state['df_ingredients_recipes'])
-                st.session_state['menu_genere'] = menu_genere
-                st.success("Menu généré avec succès!")
-            except ValueError as ve:
-                st.error(f"Erreur de génération du menu : {ve}")
-            except Exception as e:
-                st.error(f"Une erreur inattendue est survenue lors de la génération du menu : {e}")
+                if recette_choisie_id:
+                    ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, 1, date_repas_dt)
+                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
+                    # REMOVED: This logic was incorrect. A Repas B is already a leftover and shouldn't be added back
+                    # to the pool of 'original transportable meals'.
+                    # if date_repas_dt.weekday() >= 5:
+                    #      plats_transportables_semaine[date_repas_dt] = recette_choisie_id
+            else: # Repas standard
+                recette_choisie_id, ingredients_manquants_pour_recette_choisie = self._traiter_menu_standard(
+                    date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
+                    menu_recent_noms, transportable_req, temps_req, nutrition_req
+                )
+                if recette_choisie_id:
+                    nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
+                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
+                    remarques_repas = "Généré automatiquement"
+                else:
+                    nom_plat_final = "Recette non trouvée"
+                    remarques_repas = "Aucune recette appropriée trouvée selon les critères."
 
-if 'menu_genere' in st.session_state and not st.session_state['menu_genere'].empty:
-    st.dataframe(st.session_state['menu_genere'], use_container_width=True)
+            if recette_choisie_id:
+                ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
+                used_recipes_current_generation_set.add(recette_choisie_id)
+                
+                # Only add to plats_transportables_semaine if the *planning itself* requested a transportable meal
+                # AND the chosen recipe is indeed transportable.
+                # This applies only to standard meals, not Repas B.
+                if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
+                    plats_transportables_semaine[date_repas_dt] = recette_choisie_id
+
+                    logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) ajouté à plats_transportables_semaine pour le {date_repas_dt.strftime('%Y-%m-%d')}.")
+                elif participants_str != "B": # Log why it's not added if not a Repas B
+                    logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) non ajouté à plats_transportables_semaine (transportable_req est '{transportable_req}' ou recette non transportable).")
+
+
+                for ing_id, qte_manquante in ingredients_manquants_pour_recette_choisie.items():
+                    current_qte = self.ingredients_a_acheter_cumules.get(ing_id, 0.0)
+                    self.ingredients_a_acheter_cumules[ing_id] = current_qte + qte_manquante
+                    logger.debug(f"Ingrédient manquant cumulé: {self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)} - {qte_manquante:.2f} (total: {self.ingredients_a_acheter_cumules[ing_id]:.2f})")
+
+            self._log_decision_recette(recette_choisie_id, date_repas_dt, participants_str)
+
+            self._ajouter_resultat(
+                resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
+                remarques_repas, temps_prep_final, recette_choisie_id
+            )
+            # Gestion de menu_recent_noms pour l'anti-répétition des premiers mots
+            if nom_plat_final and "Pas de recette" not in nom_plat_final and "Pas de reste" not in nom_plat_final and "Erreur" not in nom_plat_final and "Invalide" not in nom_plat_final:
+                menu_recent_noms.append(nom_plat_final)
+                if len(menu_recent_noms) > 3: # Garder les 3 derniers noms de plats pour la logique anti-répétition
+                    menu_recent_noms.pop(0)
+
+
+        df_menu_genere = pd.DataFrame(resultats_df_list)
+
+        liste_courses_final = {}
+        for ing_id, qte_cumulee in self.ingredients_a_acheter_cumules.items():
+            nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
+            if nom_ing and "ID_Ing_" not in nom_ing:
+                # Essayer de récupérer l'unité de l'ingrédient
+                unite_ing = "unité(s)"
+                try:
+                    unite_ing_df = self.recette_manager.df_ingredients_initial[
+                        self.recette_manager.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_id
+                    ]
+                    if not unite_ing_df.empty and 'unité' in unite_ing_df.columns:
+                        unite_ing = unite_ing_df['unité'].iloc[0]
+                except Exception as e:
+                    logger.warning(f"Impossible de récupérer l'unité pour l'ingrédient {nom_ing}: {e}")
+
+                liste_courses_final[nom_ing] = f"{qte_cumulee:.2f} {unite_ing}"
+            else:
+                liste_courses_final[f"ID Ingrédient {ing_id}"] = f"{qte_cumulee:.2f} unité(s) (Nom non trouvé)"
+
+
+        if not df_menu_genere.empty:
+            logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
+            if 'Date' in df_menu_genere.columns:
+                df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+
+        # Convertir la liste de courses en un format plus simple pour le retour
+        formatted_liste_courses = []
+        for ing, qte_unite in liste_courses_final.items():
+            formatted_liste_courses.append(f"{ing}: {qte_unite}")
+        formatted_liste_courses.sort() # Tri alphabétique
+
+        return df_menu_genere, formatted_liste_courses
+
+
+# --- Streamlit UI ---
+
+def main():
+    st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
+    st.title("🍽️ Générateur de Menus et Liste de Courses")
+    st.markdown("---")
+
+    st.sidebar.header("Chargement des fichiers CSV")
+    st.sidebar.info("Veuillez charger les fichiers CSV nécessaires.")
+
+    uploaded_files = {}
     
-    csv_file = st.session_state['menu_genere'].to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Télécharger le menu généré",
-        data=csv_file,
-        file_name='menu_genere.csv',
-        mime='text/csv'
+    # Grouper les fichiers "Recettes" et "Ingredients_recettes"
+    st.sidebar.subheader("Fichiers de Recettes")
+    uploaded_files["Recettes.csv"] = st.sidebar.file_uploader(
+        "Uploader Recettes.csv (informations sur les recettes)", 
+        type="csv", 
+        key="Recettes.csv"
     )
-else:
-    st.info("Le menu généré s'affichera ici.")
+    uploaded_files["Ingredients_recettes.csv"] = st.sidebar.file_uploader(
+        "Uploader Ingredients_recettes.csv (ingrédients par recette)", 
+        type="csv", 
+        key="Ingredients_recettes.csv"
+    )
+
+    st.sidebar.subheader("Autres Fichiers")
+    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
+        "Uploader Planning.csv (votre planning de repas)", 
+        type="csv", 
+        key="Planning.csv"
+    )
+    # L'uploader pour Menus.csv est commenté pour ne plus le charger
+    # uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
+    #     "Uploader Menus.csv (historique de vos menus)", 
+    #     type="csv", 
+    #     key="Menus.csv"
+    # )
+    uploaded_files["Ingredients.csv"] = st.sidebar.file_uploader(
+        "Uploader Ingredients.csv (liste de vos ingrédients et stock)", 
+        type="csv", 
+        key="Ingredients.csv"
+    )
+
+    dataframes = {}
+    # On vérifie que les 4 fichiers nécessaires (hors Menus.csv) sont présents
+    required_files = ["Recettes.csv", "Ingredients_recettes.csv", "Planning.csv", "Ingredients.csv"]
+    all_files_uploaded = all(uploaded_files.get(f) is not None for f in required_files)
+    
+    if not all_files_uploaded:
+        st.warning("Veuillez charger tous les fichiers CSV nécessaires (Recettes, Ingredients_recettes, Planning, Ingredients) pour continuer.")
+        return
+
+    # Chargement des fichiers uploadés
+    for file_name, uploaded_file in uploaded_files.items():
+        if uploaded_file is not None:
+            try:
+                if file_name == "Planning.csv":
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(
+                        uploaded_file,
+                        encoding='utf-8',
+                        sep=';',
+                        parse_dates=['Date'],
+                        dayfirst=True
+                    )
+                else:
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+                
+                if "Temps_total" in df.columns:
+                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+                if "Calories" in df.columns:
+                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
+                if "Proteines" in df.columns:
+                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+
+                dataframes[file_name.replace(".csv", "")] = df
+                st.sidebar.success(f"{file_name} chargé avec succès.")
+            except Exception as e:
+                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
+                return # Arrêter l'exécution si un fichier a une erreur de chargement
+
+    # Chargement des menus à partir de Notion via la nouvelle fonction
+    with st.spinner("Chargement de l'historique des menus depuis Notion..."):
+        try:
+            df_menus_from_notion = extract_menus()
+            dataframes["Menus"] = df_menus_from_notion
+            st.sidebar.success("Historique des menus chargé depuis Notion avec succès.")
+            if df_menus_from_notion.empty:
+                 st.sidebar.warning("Aucun historique de menu trouvé sur Notion.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors de la récupération de l'historique des menus depuis Notion : {e}")
+            return
+
+
+    # Vérification des colonnes essentielles après le chargement
+    try:
+        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
+        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
+        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
+        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
+
+    except ValueError:
+        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
+        return
+
+    st.markdown("---")
+    st.header("1. Générer le Menu")
+    st.write("Cliquez sur le bouton ci-dessous pour générer le menu hebdomadaire et la liste de courses.")
+
+    if st.button("🚀 Générer le Menu"):
+        with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
+            try:
+                # Initialisation de MenuGenerator avec les DataFrames chargés
+                menu_generator = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"]
+                )
+                df_menu_genere, liste_courses = menu_generator.generer_menu()
+
+                st.success("🎉 Menu généré avec succès !")
+
+                st.header("2. Menu Généré")
+                st.dataframe(df_menu_genere)
+
+                df_export = df_menu_genere.copy()
+                
+                df_export = df_export.rename(columns={
+                    'Participant(s)': 'Participant(s)',
+                    COLONNE_NOM: 'Nom',
+                    'Date': 'Date'
+                })
+                
+                if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
+                    df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
+                df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                
+                df_export = df_export[['Date', 'Participant(s)', 'Nom']]
+                
+                csv_data = df_export.to_csv(index=False, sep=',', encoding='utf-8-sig')
+                
+                st.download_button(
+                    label="📥 Télécharger le menu en CSV",
+                    data=csv_data,
+                    file_name="menu_genere.csv",
+                    mime="text/csv"
+                )
+
+                st.header("3. Liste de Courses (Ingrédients manquants cumulés)")
+                if liste_courses:
+                    liste_courses_df = pd.DataFrame({"Ingrédient et Quantité": liste_courses})
+                    st.dataframe(liste_courses_df)
+
+                    csv = liste_courses_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                    st.download_button(
+                        label="Télécharger la liste de courses (CSV)",
+                        data=csv,
+                        file_name="liste_courses.csv",
+                        mime="text/csv",
+                    )
+                else:
+                    st.info("Aucun ingrédient manquant identifié pour la liste de courses.")
+
+            except ValueError as ve:
+                st.error(f"Erreur de données: {ve}")
+                logger.exception("Erreur de données lors de la génération du menu")
+            except Exception as e:
+                st.error(f"Une erreur inattendue est survenue lors de la génération: {e}")
+                logger.exception("Erreur inattendue lors de la génération du menu dans Streamlit")
+
+if __name__ == "__main__":
+    main()
