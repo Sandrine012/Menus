@@ -168,7 +168,7 @@ HDR_IR = ["Page_ID","Qté/pers_s","Ingrédient ok","Type de stock f"]
 def extract_ingr_rec():
     rows=[]
     for p in paginate(ID_INGREDIENTS_RECETTES,
-            filter={"property":"Type de stock f","formula":{"string":{"equals":"Autre type"}}):
+            filter={"property":"Type de stock f","formula":{"string":{"equals":"Autre type"}}}):
         pr=p["properties"]
         parent = pr.get("Elément parent",{})
         pid = ""
