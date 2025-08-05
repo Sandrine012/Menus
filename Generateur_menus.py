@@ -132,12 +132,14 @@ def extract_ingredients():
             unite=(u_prop["select"] or {}).get("name","")
         else:
             unite=""
+        # --- DÉBUT DE LA CORRECTION ---
         qte_prop = pr.get("Qte reste", {})
         qte = ""
         if qte_prop.get("type") == "formula":
             formula_result = qte_prop.get("formula", {})
             if formula_result.get("type") == "number":
                 qte = formula_result.get("number")
+        # --- FIN DE LA CORRECTION ---
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
