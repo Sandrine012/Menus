@@ -97,7 +97,6 @@ def prop_val(p,k):
     if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
     return ""
 
-# J'ai ajouté l'argument saison_filtre pour le rendre dynamique
 def extract_recettes(saison_filtre):
     filt = {"and":[
         {"property":"Elément parent","relation":{"is_empty":True}},
@@ -492,7 +491,6 @@ class MenuGenerator:
 
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         self.menus_history_manager = MenusHistoryManager(df_menus_hist)
-        # Ajout de la nouvelle variable d'instance
         self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
 
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
@@ -767,7 +765,6 @@ class MenuGenerator:
         
         ingredients_menu_cumules = {}
         
-        # J'ai ajouté une variable pour le stock initial
         initial_stock_values = {
             row[COLONNE_ID_INGREDIENT]: float(row["Qte reste"])
             for _, row in self.recette_manager.df_ingredients_initial.iterrows()
@@ -814,7 +811,6 @@ class MenuGenerator:
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
                     ingredients_menu_cumules[ing_id] = current_qte + qte_menu
                 
-                # Condition pour décrémenter ou non le stock
                 if not self.ne_pas_decrementer_stock:
                     self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
                 
@@ -845,10 +841,9 @@ class MenuGenerator:
         liste_courses_data = []
         for ing_id, qte_menu in ingredients_menu_cumules.items():
             nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
-            # Récupération de la Qte reste initiale et simulée
             qte_stock_initial = self.recette_manager.obtenir_qte_stock_initial_par_id(ing_id)
-            qte_stock_simule = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
             unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
+            qte_stock_simule = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
             qte_acheter = max(0, qte_menu - qte_stock_initial)
 
             liste_courses_data.append({
@@ -870,37 +865,37 @@ class MenuGenerator:
 
 # --- Streamlit UI ---
 
+@st.cache_data(show_spinner=False)
 def load_notion_data(saison_filtre_selection):
     """
-    Charge les données de Notion et les stocke dans la session_state pour éviter de les recharger.
+    Charge les données de Notion. Utilise le cache Streamlit pour ne pas recharger.
     """
-    # Utilisation d'une clé de cache pour recharger si la saison change
-    cache_key = f"notion_dataframes_{saison_filtre_selection}"
-    if cache_key not in st.session_state:
-        st.session_state[cache_key] = {}
-        
-        # J'ai remplacé le spinner unique par des messages de progression détaillés
-        st.sidebar.info("Chargement des données depuis Notion en cours...")
-        
-        with st.spinner("Chargement des Menus..."):
-            st.session_state[cache_key]["Menus"] = extract_menus()
-        st.sidebar.success("✅ Menus chargés.")
+    st.sidebar.info("Chargement des données depuis Notion en cours...")
+    
+    with st.spinner("Chargement des Menus..."):
+        df_menus = extract_menus()
+    st.sidebar.success("✅ Menus chargés.")
 
-        with st.spinner(f"Chargement des Recettes pour la saison '{saison_filtre_selection}'..."):
-            st.session_state[cache_key]["Recettes"] = extract_recettes(saison_filtre_selection)
-        st.sidebar.success("✅ Recettes chargées.")
+    with st.spinner(f"Chargement des Recettes pour la saison '{saison_filtre_selection}'..."):
+        df_recettes = extract_recettes(saison_filtre_selection)
+    st.sidebar.success("✅ Recettes chargées.")
 
-        with st.spinner("Chargement des Ingrédients..."):
-            st.session_state[cache_key]["Ingredients"] = extract_ingredients()
-        st.sidebar.success("✅ Ingrédients chargés.")
+    with st.spinner("Chargement des Ingrédients..."):
+        df_ingredients = extract_ingredients()
+    st.sidebar.success("✅ Ingrédients chargés.")
 
-        with st.spinner("Chargement des Ingrédients-Recettes..."):
-            st.session_state[cache_key]["Ingredients_recettes"] = extract_ingr_rec()
-        st.sidebar.success("✅ Ingrédients-Recettes chargés.")
+    with st.spinner("Chargement des Ingrédients-Recettes..."):
+        df_ingredients_recettes = extract_ingr_rec()
+    st.sidebar.success("✅ Ingrédients-Recettes chargés.")
 
-        st.sidebar.success("Toutes les données de Notion sont prêtes.")
-
-    return st.session_state[cache_key]
+    st.sidebar.success("Toutes les données de Notion sont prêtes.")
+    
+    return {
+        "Menus": df_menus,
+        "Recettes": df_recettes,
+        "Ingredients": df_ingredients,
+        "Ingredients_recettes": df_ingredients_recettes
+    }
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
@@ -909,13 +904,12 @@ def main():
     
     st.sidebar.header("Paramètres")
     
-    # Ajout du filtre de saison avec la valeur par défaut automatique
     saison_actuelle = get_current_season()
     saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
     try:
         index_saison_defaut = saisons_disponibles.index(saison_actuelle)
     except ValueError:
-        index_saison_defaut = 0 # Par défaut si la saison est inconnue
+        index_saison_defaut = 0
         
     saison_selectionnee = st.sidebar.selectbox(
         "Sélectionnez la saison:",
@@ -924,15 +918,8 @@ def main():
         key="saison_filtre"
     )
 
-    # NOUVEAU: Ajout de la case à cocher pour ne pas décrémenter le stock
-    ne_pas_decrementer_stock = st.sidebar.checkbox(
-        "Ne pas décrémenter le stock (Menu idéal)",
-        value=False,
-        help="Si coché, le stock simulé ne sera pas mis à jour après la sélection de chaque recette. Cela permet de voir le 'menu idéal' sans contrainte de stock, basé sur les stocks initiaux."
-    )
-
-    st.sidebar.subheader("Chargement des fichiers CSV")
-    st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
+    st.sidebar.subheader("Fichiers de données")
+    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
@@ -962,16 +949,15 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
-    # --- NOUVEAU : Chargement de l'historique des menus à partir de Notion via la nouvelle fonction ---
-    st.sidebar.subheader("Données chargées depuis Notion")
+    st.sidebar.subheader("Données Notion (chargement initial)")
     try:
+        # Chargement des données Notion une seule fois et mise en cache
         notion_data = load_notion_data(saison_selectionnee)
         dataframes.update(notion_data)
     except Exception as e:
         st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
         return
 
-    # Vérification des colonnes essentielles après le chargement
     try:
         verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
@@ -982,7 +968,6 @@ def main():
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
         return
 
-    # Normalisation des colonnes numériques pour les dataframes Notion
     if "Temps_total" in dataframes["Recettes"].columns:
         dataframes["Recettes"]["Temps_total"] = pd.to_numeric(dataframes["Recettes"]["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
     if "Calories" in dataframes["Recettes"].columns:
@@ -994,69 +979,84 @@ def main():
     st.header("1. Générer le Menu")
     st.write("Cliquez sur le bouton ci-dessous pour générer le menu hebdomadaire et la liste de courses.")
 
-    if st.button("🚀 Générer le Menu"):
-        with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
-            try:
-                menu_generator = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"],
-                    # Passage du nouvel argument
-                    ne_pas_decrementer_stock
-                )
-                df_menu_genere, liste_courses = menu_generator.generer_menu()
-
-                st.success("🎉 Menu généré avec succès !")
-
-                st.header("2. Menu Généré")
-                st.dataframe(df_menu_genere)
-
-                df_export = df_menu_genere.copy()
-                
-                df_export = df_export.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                
-                if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
-                    df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
-                df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                
-                df_export = df_export[['Date', 'Participant(s)', 'Nom']]
-                
-                csv_data = df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                
-                st.download_button(
-                    label="📥 Télécharger le menu en CSV",
-                    data=csv_data,
-                    file_name="menu_genere.csv",
-                    mime="text/csv"
-                )
-
-                st.header("3. Liste de Courses Détaillée")
-                if liste_courses:
-                    liste_courses_df = pd.DataFrame(liste_courses)
-                    st.dataframe(liste_courses_df)
-
-                    csv = liste_courses_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                    st.download_button(
-                        label="Télécharger la liste de courses (CSV)",
-                        data=csv,
-                        file_name="liste_courses.csv",
-                        mime="text/csv",
+    # NOUVEAU: Case à cocher et bouton pour la génération
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        ne_pas_decrementer_stock = st.checkbox(
+            "Ne pas décrémenter le stock (Menu idéal)",
+            value=False,
+            help="Si coché, le stock simulé ne sera pas mis à jour. Permet de voir le 'menu idéal' sans contrainte de stock."
+        )
+    with col2:
+        if st.button("🚀 Générer le Menu"):
+            with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
+                try:
+                    menu_generator = MenuGenerator(
+                        dataframes["Menus"],
+                        dataframes["Recettes"],
+                        dataframes["Planning"],
+                        dataframes["Ingredients"],
+                        dataframes["Ingredients_recettes"],
+                        ne_pas_decrementer_stock
                     )
-                else:
-                    st.info("Aucun ingrédient manquant identifié pour la liste de courses.")
+                    df_menu_genere, liste_courses = menu_generator.generer_menu()
 
-            except ValueError as ve:
-                st.error(f"Erreur de données: {ve}")
-                logger.exception("Erreur de données lors de la génération du menu")
-            except Exception as e:
-                st.error(f"Une erreur inattendue est survenue lors de la génération: {e}")
-                logger.exception("Erreur inattendue lors de la génération du menu dans Streamlit")
+                    st.session_state['df_menu_genere'] = df_menu_genere
+                    st.session_state['liste_courses'] = liste_courses
+                    st.session_state['generation_reussie'] = True
+
+                except ValueError as ve:
+                    st.error(f"Erreur de données: {ve}")
+                    logger.exception("Erreur de données lors de la génération du menu")
+                    st.session_state['generation_reussie'] = False
+                except Exception as e:
+                    st.error(f"Une erreur inattendue est survenue lors de la génération: {e}")
+                    logger.exception("Erreur inattendue lors de la génération du menu dans Streamlit")
+                    st.session_state['generation_reussie'] = False
+
+    if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
+        st.success("🎉 Menu généré avec succès !")
+
+        st.header("2. Menu Généré")
+        st.dataframe(st.session_state['df_menu_genere'])
+
+        df_export = st.session_state['df_menu_genere'].copy()
+        
+        df_export = df_export.rename(columns={
+            'Participant(s)': 'Participant(s)',
+            COLONNE_NOM: 'Nom',
+            'Date': 'Date'
+        })
+        
+        if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
+            df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
+        df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
+        
+        df_export = df_export[['Date', 'Participant(s)', 'Nom']]
+        
+        csv_data = df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
+        
+        st.download_button(
+            label="📥 Télécharger le menu en CSV",
+            data=csv_data,
+            file_name="menu_genere.csv",
+            mime="text/csv"
+        )
+
+        st.header("3. Liste de Courses Détaillée")
+        if st.session_state['liste_courses']:
+            liste_courses_df = pd.DataFrame(st.session_state['liste_courses'])
+            st.dataframe(liste_courses_df)
+
+            csv = liste_courses_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
+            st.download_button(
+                label="Télécharger la liste de courses (CSV)",
+                data=csv,
+                file_name="liste_courses.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Aucun ingrédient manquant identifié pour la liste de courses.")
 
 if __name__ == "__main__":
     main()
