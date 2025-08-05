@@ -24,11 +24,11 @@ TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-NOTION_API_KEY           = st.secrets["notion_api_key"]
-ID_RECETTES              = st.secrets["notion_database_id_recettes"]
-ID_MENUS                 = st.secrets["notion_database_id_menus"]
-ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
-ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
+NOTION_API_KEY = st.secrets["notion_api_key"]
+ID_RECETTES = st.secrets["notion_database_id_recettes"]
+ID_MENUS = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
@@ -120,12 +120,13 @@ def extract_menus():
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
+# En-tête mis à jour pour la liste des ingrédients
 HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
         pr=p["properties"]
-        
+
         # 1. Extraction de l'unité
         u_prop = pr.get("unité",{})
         if u_prop.get("type")=="rich_text":
@@ -155,9 +156,10 @@ def extract_ingredients():
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
             (pr["Type de stock"]["select"] or {}).get("name",""),
             unite,
-            str(qte_reste)
+            qte_reste
         ])
     return pd.DataFrame(rows,columns=HDR_INGR)
+
 
 HDR_IR = ["Page_ID","Qté/pers_s","Ingrédient ok","Type de stock f"]
 def extract_ingr_rec():
@@ -317,7 +319,7 @@ def generer_liste_de_courses(menu_genere, recettes_df, ingredients_df, rm, nb_pe
     Calcule Qté stock, Qté menus et Qté à acheter pour chaque ingrédient.
     """
     liste_courses = {}
-    
+
     # 1. Agréger les besoins en ingrédients pour tout le menu
     for recette_id_str in menu_genere.values():
         if recette_id_str:
@@ -326,28 +328,29 @@ def generer_liste_de_courses(menu_genere, recettes_df, ingredients_df, rm, nb_pe
                 if ing_id not in liste_courses:
                     liste_courses[ing_id] = {"qte_menus": 0, "nom": "", "unite": ""}
                 liste_courses[ing_id]["qte_menus"] += qte_necessaire
-    
+
     # 2. Récupérer le stock et calculer la quantité à acheter
     rows = []
-    ingredients_df = ingredients_df.set_index("Page_ID")
+    ingredients_df_indexed = ingredients_df.set_index("Page_ID")
     for ing_id, valeurs in liste_courses.items():
-        if ing_id in ingredients_df.index:
-            nom_ingredient = ingredients_df.loc[ing_id, "Nom"]
-            unite = ingredients_df.loc[ing_id, "unité"]
-            qte_stock = float(ingredients_df.loc[ing_id, "Qte reste"])
+        if ing_id in ingredients_df_indexed.index:
+            nom_ingredient = ingredients_df_indexed.loc[ing_id, "Nom"]
+            unite = ingredients_df_indexed.loc[ing_id, "unité"]
+            # La Qte stock est la Qte reste de l'ingrédient
+            qte_stock = float(ingredients_df_indexed.loc[ing_id, "Qte reste"])
             qte_menus = valeurs["qte_menus"]
             qte_a_acheter = max(0, qte_menus - qte_stock)
-            
+
             if qte_a_acheter > 0:
                 rows.append([nom_ingredient, qte_stock, qte_menus, qte_a_acheter, unite])
-    
+
     # 3. Créer le DataFrame final et l'afficher
     if rows:
         df_courses = pd.DataFrame(rows, columns=["Ingrédient", "Qté stock", "Qté menus", "Qté à acheter", "Unité"])
         df_courses = df_courses.sort_values(by="Ingrédient")
-        
+
         st.subheader("🛒 Votre liste de courses")
-        
+
         # Formatter les colonnes pour une meilleure lisibilité
         df_courses["Qté stock"] = df_courses["Qté stock"].apply(lambda x: f"{x:.2f}").str.replace('.', ',')
         df_courses["Qté menus"] = df_courses["Qté menus"].apply(lambda x: f"{x:.2f}").str.replace('.', ',')
@@ -363,6 +366,7 @@ def run_streamlit_app():
     st.set_page_config(page_title="Générateur de Menus", layout="wide")
     st.title("🍽️ Générateur de Menus")
 
+    # Bouton de rechargement des données
     if 'df_recettes' not in st.session_state or st.button('Recharger les données depuis Notion'):
         with st.spinner('Chargement des données depuis Notion...'):
             try:
@@ -371,10 +375,18 @@ def run_streamlit_app():
                 st.session_state.df_ingredients_recettes = extract_ingr_rec()
                 st.session_state.df_menus = extract_menus()
                 st.session_state.last_load_time = datetime.now()
+                # Initialiser les variables de session pour les menus générés
+                st.session_state.menu_genere = {}
+                st.session_state.recettes_generees = {}
             except Exception as e:
                 st.error(f"Une erreur est survenue lors du chargement des données : {e}")
                 st.stop()
         st.success(f"Données chargées le {st.session_state.last_load_time.strftime('%Y-%m-%d à %H:%M:%S')}")
+
+    # Vérifier que les DataFrames sont bien dans session_state avant de continuer
+    if 'df_recettes' not in st.session_state:
+        st.info("Cliquez sur le bouton pour charger les données.")
+        return
 
     df_recettes = st.session_state.df_recettes
     df_ingredients = st.session_state.df_ingredients
@@ -392,7 +404,6 @@ def run_streamlit_app():
     type_repas = st.sidebar.selectbox("Type de repas", options=["rapide", "express", "peu importe"])
 
     if st.button("Générer mon menu"):
-        # Logique de génération de menu (non modifiée)
         st.session_state.menu_genere = {}
         st.session_state.recettes_generees = {}
 
@@ -420,24 +431,24 @@ def run_streamlit_app():
         recettes_dispo['score_anti_gaspi'] = recettes_dispo[COLONNE_ID_RECETTE].apply(
             lambda x: 10 if rm.recette_utilise_ingredient_anti_gaspi(x) else 0)
         recettes_dispo['score_total'] = recettes_dispo['score_dispo'] * 0.7 + recettes_dispo['score_anti_gaspi'] * 0.3
-        
+
         # Sélection des repas
         for i in range(nb_repas):
             if recettes_dispo.empty: break
-            
+
             recette_selectionnee = recettes_dispo.sort_values(by="score_total", ascending=False).iloc[0]
             st.session_state.recettes_generees[f"Repas {i+1}"] = recette_selectionnee[COLONNE_NOM]
             st.session_state.menu_genere[f"Repas {i+1}"] = recette_selectionnee[COLONNE_ID_RECETTE]
 
             recettes_dispo = recettes_dispo.drop(recette_selectionnee.name)
-            
-            st.success(f"Menu généré avec succès pour {nb_repas} repas.")
-    
-    if st.session_state.get('menu_genere'):
+
+        st.success(f"Menu généré avec succès pour {nb_repas} repas.")
+
+    if st.session_state.get('menu_genere') and st.session_state.get('recettes_generees'):
         st.subheader("✨ Votre menu de la semaine")
         for repas, nom_recette in st.session_state.recettes_generees.items():
             st.write(f"- **{repas}** : {nom_recette}")
-        
+
         # Appel de la nouvelle fonction pour la liste de courses
         generer_liste_de_courses(st.session_state.menu_genere, df_recettes, df_ingredients, rm, nb_personnes)
 
