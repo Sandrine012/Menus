@@ -920,6 +920,16 @@ def add_menu_to_notion(df_menu, notion_db_id):
                 ]
             }
 
+        # Ajout des participants UNIQUEMENT si la valeur est disponible
+        if participants and isinstance(participants, str):
+            participants_list = [p.strip() for p in participants.split(',') if p.strip()]
+            if participants_list:
+                new_page_properties["Participant(s)"] = {
+                    "multi_select": [
+                        {"name": p} for p in participants_list
+                    ]
+                }
+
         try:
             notion.pages.create(
                 parent={"database_id": notion_db_id},
