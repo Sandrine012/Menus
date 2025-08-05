@@ -24,11 +24,11 @@ TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-NOTION_API_KEY           = st.secrets["notion_api_key"]
-ID_RECETTES              = st.secrets["notion_database_id_recettes"]
-ID_MENUS                 = st.secrets["notion_database_id_menus"]
-ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
-ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
+NOTION_API_KEY = st.secrets["notion_api_key"]
+ID_RECETTES = st.secrets["notion_database_id_recettes"]
+ID_MENUS = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
@@ -120,30 +120,40 @@ def extract_menus():
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
-HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
+# En-tête mis à jour pour la liste des ingrédients
+HDR_INGR = ["Page_ID", "Nom", "Type de stock", "unité", "Qte stock", "Qte menus"]
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
         pr=p["properties"]
+
+        # Extraction de l'unité
         u_prop = pr.get("unité",{})
+        unite = ""
         if u_prop.get("type")=="rich_text":
             unite="".join(t["plain_text"] for t in u_prop["rich_text"])
         elif u_prop.get("type")=="select":
             unite=(u_prop["select"] or {}).get("name","")
-        else:
-            unite=""
-        qte_prop = pr.get("Qte reste", {})
-        qte = ""
-        if qte_prop.get("type") == "formula":
-            formula_result = qte_prop.get("formula", {})
-            if formula_result.get("type") == "number":
-                qte = formula_result.get("number")
+
+        # Extraction de la quantité en stock
+        qte_stock_prop = pr.get("Qté stock", {})
+        qte_stock = qte_stock_prop.get("number", 0) if qte_stock_prop.get("type") == "number" else 0
+
+        # Extraction de la quantité utilisée dans les menus (rollup)
+        qte_menus_prop = pr.get("Qte Menus", {})
+        qte_menus = 0
+        if qte_menus_prop.get("type") == "rollup":
+            rollup_result = qte_menus_prop.get("rollup", {})
+            if rollup_result.get("type") == "number":
+                qte_menus = rollup_result.get("number", 0)
+        
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
             (pr["Type de stock"]["select"] or {}).get("name",""),
             unite,
-            str(qte or "")
+            qte_stock,
+            qte_menus
         ])
     return pd.DataFrame(rows,columns=HDR_INGR)
 
@@ -189,10 +199,10 @@ class RecetteManager:
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
 
         self.stock_simule = self.df_ingredients_initial.copy()
-        if "Qte reste" in self.stock_simule.columns:
-            self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
+        if "Qte stock" in self.stock_simule.columns:
+            self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte stock"], errors='coerce').fillna(0).astype(float)
         else:
-            logger.error("'Qte reste' manquante dans df_ingredients pour stock_simule.")
+            logger.error("'Qte stock' manquante dans df_ingredients pour stock_simule.")
             self.stock_simule["Qte reste"] = 0.0
 
         self.anti_gaspi_ingredients = self._trouver_ingredients_stock_eleve()
@@ -908,7 +918,7 @@ def main():
         verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte stock", "Qte menus", "unité"], "Ingredients")
         verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
     except ValueError:
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
