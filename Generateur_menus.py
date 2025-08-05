@@ -481,7 +481,7 @@ class MenusHistoryManager:
 
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
-    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes):
+    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
             self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
@@ -492,6 +492,8 @@ class MenuGenerator:
 
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         self.menus_history_manager = MenusHistoryManager(df_menus_hist)
+        # Ajout de la nouvelle variable d'instance
+        self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
 
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
@@ -719,8 +721,6 @@ class MenuGenerator:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            if isinstance(date_plat_orig, str):
-                date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
@@ -771,7 +771,7 @@ class MenuGenerator:
         initial_stock_values = {
             row[COLONNE_ID_INGREDIENT]: float(row["Qte reste"])
             for _, row in self.recette_manager.df_ingredients_initial.iterrows()
-            if row["Qte reste"].replace('.', '', 1).isdigit()
+            if isinstance(row["Qte reste"], str) and row["Qte reste"].replace('.', '', 1).isdigit()
         }
 
         for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
@@ -814,7 +814,10 @@ class MenuGenerator:
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
                     ingredients_menu_cumules[ing_id] = current_qte + qte_menu
                 
-                self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
+                # Condition pour décrémenter ou non le stock
+                if not self.ne_pas_decrementer_stock:
+                    self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
+                
                 used_recipes_current_generation_set.add(recette_choisie_id)
                 
                 if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
@@ -921,6 +924,13 @@ def main():
         key="saison_filtre"
     )
 
+    # NOUVEAU: Ajout de la case à cocher pour ne pas décrémenter le stock
+    ne_pas_decrementer_stock = st.sidebar.checkbox(
+        "Ne pas décrémenter le stock (Menu idéal)",
+        value=False,
+        help="Si coché, le stock simulé ne sera pas mis à jour après la sélection de chaque recette. Cela permet de voir le 'menu idéal' sans contrainte de stock, basé sur les stocks initiaux."
+    )
+
     st.sidebar.subheader("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
     
@@ -992,7 +1002,9 @@ def main():
                     dataframes["Recettes"],
                     dataframes["Planning"],
                     dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"]
+                    dataframes["Ingredients_recettes"],
+                    # Passage du nouvel argument
+                    ne_pas_decrementer_stock
                 )
                 df_menu_genere, liste_courses = menu_generator.generer_menu()
 
