@@ -32,6 +32,22 @@ ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
+# ────── FONCTION POUR DÉTERMINER LA SAISON ACTUELLE ────────────────
+def get_current_season():
+    """Détermine la saison actuelle en France."""
+    jour = datetime.now().day
+    mois = datetime.now().month
+
+    # Dates de début de saison approximatives pour l'hémisphère nord
+    if (mois == 3 and jour >= 21) or mois in [4, 5] or (mois == 6 and jour < 21):
+        return "Printemps"
+    elif (mois == 6 and jour >= 21) or mois in [7, 8] or (mois == 9 and jour < 23):
+        return "Été"
+    elif (mois == 9 and jour >= 23) or mois in [10, 11] or (mois == 12 and jour < 21):
+        return "Automne"
+    else:
+        return "Hiver"
+
 # ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
 def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
@@ -68,7 +84,7 @@ MAP_REC = {
     "Temps_total":("Temps_total","form"), "Aime_pas_princip":("Aime_pas_princip","rollstr"),
     "Type_plat":("Type_plat","ms"), "Transportable":("Transportable","selcb")
 }
-SAISON_FILTRE = "Printemps"
+
 def prop_val(p,k):
     if not p: return ""
     t = p["type"]
@@ -80,12 +96,14 @@ def prop_val(p,k):
     if k=="rollstr": return ", ".join(it["formula"].get("string") or "." for it in p["rollup"]["array"])
     if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
     return ""
-def extract_recettes():
+
+# J'ai ajouté l'argument saison_filtre pour le rendre dynamique
+def extract_recettes(saison_filtre):
     filt = {"and":[
         {"property":"Elément parent","relation":{"is_empty":True}},
         {"or":[
             {"property":"Saison","multi_select":{"contains":"Toute l'année"}},
-            {"property":"Saison","multi_select":{"contains":SAISON_FILTRE}},
+            {"property":"Saison","multi_select":{"contains":saison_filtre}},
             {"property":"Saison","multi_select":{"is_empty":True}}]},
         {"or":[
             {"property":"Type_plat","multi_select":{"contains":"Salade"}},
@@ -792,9 +810,9 @@ class MenuGenerator:
 
             if recette_choisie_id:
                 ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
-                for ing_id, qte_necessaire in ingredients_necessaires_ce_repas.items():
+                for ing_id, qte_menu in ingredients_necessaires_ce_repas.items():
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
-                    ingredients_menu_cumules[ing_id] = current_qte + qte_necessaire
+                    ingredients_menu_cumules[ing_id] = current_qte + qte_menu
                 
                 self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
                 used_recipes_current_generation_set.add(recette_choisie_id)
@@ -849,42 +867,61 @@ class MenuGenerator:
 
 # --- Streamlit UI ---
 
-def load_notion_data():
+def load_notion_data(saison_filtre_selection):
     """
     Charge les données de Notion et les stocke dans la session_state pour éviter de les recharger.
     """
-    if "notion_dataframes" not in st.session_state:
-        st.session_state.notion_dataframes = {}
+    # Utilisation d'une clé de cache pour recharger si la saison change
+    cache_key = f"notion_dataframes_{saison_filtre_selection}"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = {}
         
         # J'ai remplacé le spinner unique par des messages de progression détaillés
         st.sidebar.info("Chargement des données depuis Notion en cours...")
         
         with st.spinner("Chargement des Menus..."):
-            st.session_state.notion_dataframes["Menus"] = extract_menus()
+            st.session_state[cache_key]["Menus"] = extract_menus()
         st.sidebar.success("✅ Menus chargés.")
 
-        with st.spinner("Chargement des Recettes..."):
-            st.session_state.notion_dataframes["Recettes"] = extract_recettes()
+        with st.spinner(f"Chargement des Recettes pour la saison '{saison_filtre_selection}'..."):
+            st.session_state[cache_key]["Recettes"] = extract_recettes(saison_filtre_selection)
         st.sidebar.success("✅ Recettes chargées.")
 
         with st.spinner("Chargement des Ingrédients..."):
-            st.session_state.notion_dataframes["Ingredients"] = extract_ingredients()
+            st.session_state[cache_key]["Ingredients"] = extract_ingredients()
         st.sidebar.success("✅ Ingrédients chargés.")
 
         with st.spinner("Chargement des Ingrédients-Recettes..."):
-            st.session_state.notion_dataframes["Ingredients_recettes"] = extract_ingr_rec()
+            st.session_state[cache_key]["Ingredients_recettes"] = extract_ingr_rec()
         st.sidebar.success("✅ Ingrédients-Recettes chargés.")
 
         st.sidebar.success("Toutes les données de Notion sont prêtes.")
 
-    return st.session_state.notion_dataframes
+    return st.session_state[cache_key]
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
+    
+    st.sidebar.header("Paramètres")
+    
+    # Ajout du filtre de saison avec la valeur par défaut automatique
+    saison_actuelle = get_current_season()
+    saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
+    try:
+        index_saison_defaut = saisons_disponibles.index(saison_actuelle)
+    except ValueError:
+        index_saison_defaut = 0 # Par défaut si la saison est inconnue
+        
+    saison_selectionnee = st.sidebar.selectbox(
+        "Sélectionnez la saison:",
+        options=saisons_disponibles,
+        index=index_saison_defaut,
+        key="saison_filtre"
+    )
 
-    st.sidebar.header("Chargement des fichiers CSV")
+    st.sidebar.subheader("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
     
     uploaded_files = {}
@@ -918,7 +955,7 @@ def main():
     # --- NOUVEAU : Chargement de l'historique des menus à partir de Notion via la nouvelle fonction ---
     st.sidebar.subheader("Données chargées depuis Notion")
     try:
-        notion_data = load_notion_data()
+        notion_data = load_notion_data(saison_selectionnee)
         dataframes.update(notion_data)
     except Exception as e:
         st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
