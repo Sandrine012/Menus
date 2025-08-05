@@ -168,7 +168,7 @@ HDR_IR = ["Page_ID","Qté/pers_s","Ingrédient ok","Type de stock f"]
 def extract_ingr_rec():
     rows=[]
     for p in paginate(ID_INGREDIENTS_RECETTES,
-            filter={"property":"Type de stock f","formula":{"string":{"equals":"Autre type"}}}):
+            filter={"property":"Type de stock f","formula":{"string":{"equals":"Autre type"}}):
         pr=p["properties"]
         parent = pr.get("Elément parent",{})
         pid = ""
@@ -920,8 +920,6 @@ def main():
     st.sidebar.subheader("Télécharger le planning")
     uploaded_file = st.sidebar.file_uploader("Chargez votre fichier 'planning.csv'", type="csv")
 
-    st.sidebar.subheader("Génération de menus")
-    nombre_jours = st.sidebar.number_input("Nombre de jours à générer :", min_value=1, max_value=21, value=7)
     
     # Bouton de rechargement des données
     if st.sidebar.button("Recharger les données depuis Notion"):
