@@ -877,16 +877,11 @@ def add_menu_to_notion(df_menu, notion_db_id):
     failure_count = 0
     
     for _, row in df_menu.iterrows():
-        # Utiliser .get pour éviter l'erreur si la colonne est manquante
         recette_id = row.get('Recette_ID')
         nom_plat = row.get(COLONNE_NOM)
         participants = row.get('Participant(s)')
         date_str = row.get('Date')
 
-        # On ne tente pas d'ajouter les "restes" ou les repas non trouvés
-        if not recette_id or "Restes" in str(nom_plat) or "Recette non trouvée" in str(nom_plat):
-            continue
-        
         if not date_str:
             st.warning(f"Date invalide pour la ligne : {nom_plat}. L'enregistrement sera ignoré.")
             failure_count += 1
@@ -898,7 +893,8 @@ def add_menu_to_notion(df_menu, notion_db_id):
             st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
-
+        
+        # Le dictionnaire des propriétés de la page
         new_page_properties = {
             "Nom Menu": {
                 "title": [
@@ -913,20 +909,16 @@ def add_menu_to_notion(df_menu, notion_db_id):
                 "date": {
                     "start": date_notion
                 }
-            },
-            "Recette": {
+            }
+        }
+        
+        # Ajout de la relation de recette UNIQUEMENT si l'ID est disponible
+        if recette_id:
+            new_page_properties["Recette"] = {
                 "relation": [
                     {"id": recette_id}
                 ]
-            },
-            # Note: Si vous avez une propriété "Participant(s)" en multi-select dans Notion,
-            # vous devrez adapter le code pour la traiter. Par exemple:
-            # "Participant(s)": {
-            #     "multi_select": [
-            #         {"name": p.strip()} for p in participants.split(',')
-            #     ]
-            # }
-        }
+            }
 
         try:
             notion.pages.create(
@@ -935,7 +927,7 @@ def add_menu_to_notion(df_menu, notion_db_id):
             )
             success_count += 1
         except Exception as e:
-            logger.error(f"Erreur lors de l'envoi de la recette {nom_plat} à Notion : {e}")
+            logger.error(f"Erreur lors de l'envoi de la ligne '{nom_plat}' à Notion : {e}")
             failure_count += 1
             
     return success_count, failure_count
