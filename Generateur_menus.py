@@ -480,7 +480,7 @@ class MenusHistoryManager:
 
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
-    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock):
+    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
             self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
@@ -491,7 +491,6 @@ class MenuGenerator:
 
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         self.menus_history_manager = MenusHistoryManager(df_menus_hist)
-        self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
 
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
@@ -812,8 +811,8 @@ class MenuGenerator:
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
                     ingredients_menu_cumules[ing_id] = current_qte + qte_menu
                 
-                if not self.ne_pas_decrementer_stock:
-                    self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
+                # C'est ici que le stock est décrémenté pour la génération réaliste
+                self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
                 
                 used_recipes_current_generation_set.add(recette_choisie_id)
                 
@@ -848,6 +847,7 @@ class MenuGenerator:
             qte_acheter = max(0, qte_menu - qte_stock_initial)
 
             liste_courses_data.append({
+                "Page_ID": ing_id,
                 "Ingredient": f"{nom_ing} ({unite})",
                 "Quantité du menu": f"{qte_menu:.2f}",
                 "Qte reste (initiale)": f"{qte_stock_initial:.2f}",
@@ -857,13 +857,6 @@ class MenuGenerator:
 
         if not df_menu_genere.empty:
             logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
-            # Ajout de la colonne de l'ID de recette pour le traitement Notion
-            # La colonne est déjà ajoutée dans _ajouter_resultat, cette partie est inutile
-            # df_menu_genere['Recette_ID'] = [
-            #     self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_NOM] == row[COLONNE_NOM]][COLONNE_ID_RECETTE].iloc[0]
-            #     if row[COLONNE_NOM] in self.recette_manager.df_recettes[COLONNE_NOM].values else None
-            #     for _, row in df_menu_genere.iterrows()
-            # ]
             if 'Date' in df_menu_genere.columns:
                 df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
         
@@ -871,399 +864,123 @@ class MenuGenerator:
 
         return df_menu_genere, liste_courses_data
 
-# Nouvelle fonction pour envoyer les données à Notion
-def add_menu_to_notion(df_menu, notion_db_id):
-    success_count = 0
-    failure_count = 0
+def add_menu_to_notion(df_menu, db_id):
+    success_count, failure_count = 0, 0
+    df_menu['Date'] = pd.to_datetime(df_menu['Date'], format="%Y-%m-%d %H:%M", errors='coerce').dt.strftime('%Y-%m-%d')
     
-    # ID de la page 'Courses' pour la relation
-    COURSES_PAGE_ID = "1c66fa46f8b2809ca9b7c11ffaf1d582"
-
     for _, row in df_menu.iterrows():
-        recette_id = row.get('Recette_ID')
-        nom_plat = row.get(COLONNE_NOM)
-        participants = row.get('Participant(s)')
-        date_str = row.get('Date')
-
-        if not date_str:
-            st.warning(f"Date invalide pour la ligne : {nom_plat}. L'enregistrement sera ignoré.")
-            failure_count += 1
-            continue
+        try:
+            properties = {
+                "Nom Menu": {"title": [{"text": {"content": row['Nom']}}]},
+                "Date": {"date": {"start": row['Date']}},
+                "Participant(s)": {"rich_text": [{"text": {"content": row['Participant(s)']}}]},
+                "Remarques spécifiques": {"rich_text": [{"text": {"content": row['Remarques spécifiques']}}]},
+                "Temps": {"rich_text": [{"text": {"content": row['Temps de préparation']}}]},
+            }
+            if row['Recette_ID']:
+                properties["Recette"] = {"relation": [{"id": row['Recette_ID']}]}
             
-        try:
-            date_notion = datetime.strptime(date_str.split(' ')[0], '%Y-%m-%d').date().isoformat()
-        except ValueError:
-            st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
-            failure_count += 1
-            continue
-        
-        # Le dictionnaire des propriétés de la page
-        new_page_properties = {
-            "Nom Menu": {
-                "title": [
-                    {
-                        "text": {
-                            "content": nom_plat
-                        }
-                    }
-                ]
-            },
-            "Date": {
-                "date": {
-                    "start": date_notion
-                }
-            },
-            "Liste": {
-                "relation": [
-                    {"id": COURSES_PAGE_ID}
-                ]
-            }
-        }
-        
-        # Ajout de la relation de recette UNIQUEMENT si l'ID est disponible et que ce n'est pas un repas "Restes"
-        if recette_id and "Restes" not in str(nom_plat):
-            new_page_properties["Recette"] = {
-                "relation": [
-                    {"id": recette_id}
-                ]
-            }
-
-        # Ajout des participants UNIQUEMENT si la valeur est disponible
-        if participants and isinstance(participants, str):
-            participants_list = [p.strip() for p in participants.split(',') if p.strip()]
-            if participants_list:
-                new_page_properties["Participant(s)"] = {
-                    "multi_select": [
-                        {"name": p} for p in participants_list
-                    ]
-                }
-
-        try:
-            notion.pages.create(
-                parent={"database_id": notion_db_id},
-                properties=new_page_properties
-            )
+            notion.pages.create(parent={"database_id": db_id}, properties=properties)
             success_count += 1
+            logger.info(f"Page Notion créée avec succès pour le menu '{row['Nom']}'")
         except Exception as e:
-            logger.error(f"Erreur lors de l'envoi de la ligne '{nom_plat}' à Notion : {e}")
             failure_count += 1
+            logger.error(f"Erreur lors de la création de la page Notion pour le menu '{row['Nom']}': {e}")
             
     return success_count, failure_count
 
-# --- Streamlit UI ---
-
-@st.cache_data(show_spinner=False)
-def load_notion_data(saison_filtre_selection):
-    """
-    Charge les données de Notion. Utilise le cache Streamlit pour ne pas recharger.
-    """
-    st.sidebar.info("Chargement des données depuis Notion en cours...")
-    
-    with st.spinner("Chargement des Menus..."):
+def load_data(saison_actuelle):
+    try:
+        df_recettes = extract_recettes(saison_actuelle)
         df_menus = extract_menus()
-    st.sidebar.success("✅ Menus chargés.")
-
-    with st.spinner(f"Chargement des Recettes pour la saison '{saison_filtre_selection}'..."):
-        df_recettes = extract_recettes(saison_filtre_selection)
-    st.sidebar.success("✅ Recettes chargées.")
-
-    with st.spinner("Chargement des Ingrédients..."):
         df_ingredients = extract_ingredients()
-    st.sidebar.success("✅ Ingrédients chargés.")
-
-    with st.spinner("Chargement des Ingrédients-Recettes..."):
         df_ingredients_recettes = extract_ingr_rec()
-    st.sidebar.success("✅ Ingrédients-Recettes chargés.")
-
-    st.sidebar.success("Toutes les données de Notion sont prêtes.")
-    
-    return {
-        "Menus": df_menus,
-        "Recettes": df_recettes,
-        "Ingredients": df_ingredients,
-        "Ingredients_recettes": df_ingredients_recettes
-    }
+        
+        verifier_colonnes(df_recettes, HDR_RECETTES, "Recettes Notion")
+        verifier_colonnes(df_menus, HDR_MENUS, "Menus Notion")
+        verifier_colonnes(df_ingredients, HDR_INGR, "Ingrédients Notion")
+        
+        return df_recettes, df_menus, df_ingredients, df_ingredients_recettes
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des données depuis Notion : {e}")
+        return None, None, None, None
 
 def main():
-    st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
-    st.title("🍽️ Générateur de Menus et Liste de Courses")
-    st.markdown("---")
+    st.set_page_config(layout="wide")
+    st.title("Générateur de Menus Automatisé pour Notion")
     
-    st.sidebar.header("Paramètres")
+    if 'generation_reussie' not in st.session_state:
+        st.session_state['generation_reussie'] = False
     
+    # ────── EN TÊTE ET SÉLECTEURS ──────────────────────────────────
     saison_actuelle = get_current_season()
-    saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
-    try:
-        index_saison_defaut = saisons_disponibles.index(saison_actuelle)
-    except ValueError:
-        index_saison_defaut = 0
-        
-    saison_selectionnee = st.sidebar.selectbox(
-        "Sélectionnez la saison:",
-        options=saisons_disponibles,
-        index=index_saison_defaut,
-        key="saison_filtre"
-    )
+    st.sidebar.header("Paramètres de la génération")
+    st.sidebar.write(f"Saison actuelle : **{saison_actuelle}**")
 
-    st.sidebar.subheader("Fichiers de données")
-    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
+    st.sidebar.subheader("Télécharger le planning")
+    uploaded_file = st.sidebar.file_uploader("Chargez votre fichier 'planning.csv'", type="csv")
+
+    st.sidebar.subheader("Génération de menus")
+    nombre_jours = st.sidebar.number_input("Nombre de jours à générer :", min_value=1, max_value=21, value=7)
     
-    uploaded_files = {}
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
-    )
+    # Bouton de rechargement des données
+    if st.sidebar.button("Recharger les données depuis Notion"):
+        st.session_state['df_recettes'] = None
+        st.session_state['df_menus'] = None
+        st.session_state['df_ingredients'] = None
+        st.session_state['df_ingredients_recettes'] = None
 
-    if uploaded_files["Planning.csv"] is None:
-        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
+    # ────── CHARGEMENT DES DONNÉES ────────────────────────────────
+    if 'df_recettes' not in st.session_state or st.session_state['df_recettes'] is None:
+        with st.spinner("Chargement des données depuis Notion..."):
+            st.session_state['df_recettes'], st.session_state['df_menus'], st.session_state['df_ingredients'], st.session_state['df_ingredients_recettes'] = load_data(saison_actuelle)
+    
+    if st.session_state['df_recettes'] is None:
+        st.warning("Veuillez vérifier les identifiants de bases de données ou la clé API Notion.")
         return
 
-    dataframes = {}
+    # Création du RecetteManager une seule fois
+    if 'recette_manager_instance' not in st.session_state:
+        st.session_state['recette_manager_instance'] = RecetteManager(st.session_state['df_recettes'], st.session_state['df_ingredients'], st.session_state['df_ingredients_recettes'])
 
-    try:
-        uploaded_files["Planning.csv"].seek(0)
-        df_planning = pd.read_csv(
-            uploaded_files["Planning.csv"],
-            encoding='utf-8',
-            sep=';',
-            parse_dates=['Date'],
-            dayfirst=True
-        )
-        dataframes["Planning"] = df_planning
-        st.sidebar.success("Planning.csv chargé avec succès.")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
-        return
+    # ────── GÉNÉRATION AUTOMATIQUE ───────────────────────────────
+    if uploaded_file is not None:
+        df_planning = pd.read_csv(uploaded_file, sep=';', encoding='utf-8')
+        verifier_colonnes(df_planning, ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "planning.csv")
 
-    st.markdown("---")
-    st.header("1. Générer et Exporter en 1 clic")
-    st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion.")
-    
-    if st.button("🚀 Générer et Envoyer le Menu Réaliste (1 clic)", use_container_width=True):
-        st.session_state['generation_reussie'] = False
-        
-        with st.spinner("Chargement des données Notion..."):
-            try:
-                notion_data = load_notion_data(saison_selectionnee)
-                dataframes.update(notion_data)
-            except Exception as e:
-                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
-                return
-        
-        with st.spinner("Vérification des colonnes..."):
-            try:
-                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
-                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
-                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
-            except ValueError as ve:
-                st.error(f"Erreur de données : {ve}")
-                return
+        generator = MenuGenerator(st.session_state['df_menus'], st.session_state['df_recettes'], df_planning, st.session_state['df_ingredients'], st.session_state['df_ingredients_recettes'])
 
-        with st.spinner("Génération du menu réaliste..."):
-            try:
-                menu_generator_realiste = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=False
-                )
-                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
-                st.session_state['df_menu_realiste'] = df_menu_realiste
-                st.session_state['liste_courses_realiste'] = liste_courses_realiste
-            except Exception as e:
-                st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
-                return
+        # Création des onglets pour la génération
+        tab1, tab2 = st.tabs(["2. Générer et Exporter en 1 clic", "3. Afficher la liste de courses"])
 
-        with st.spinner("Envoi du menu à Notion..."):
-            success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
-            if success > 0:
-                st.success(f"✅ Opération '1 clic' réussie ! {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-            if failure > 0:
-                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-            if success == 0 and failure == 0:
-                st.info("Aucun repas valide à ajouter.")
+        with tab1:
+            st.header("2. Générer le menu et l'envoyer à Notion")
+            st.info("Le menu est généré en fonction des contraintes de votre fichier `planning.csv` et de votre stock Notion. Les plats transportables sont réutilisés pour les Repas B.")
+            
+            if st.button("Générer et envoyer le menu en 1 clic"):
+                with st.spinner("Génération et envoi en cours..."):
+                    df_menu_realiste, liste_courses_realiste = generator.generer_menu()
+                    st.session_state['df_menu_realiste'] = df_menu_realiste
+                    st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-        st.session_state['generation_reussie'] = True
-
-    st.markdown("---")
-    st.header("2. Générer les Menus")
-    st.write("Cliquez sur le bouton ci-dessous pour générer les deux versions du menu hebdomadaire et leurs listes de courses.")
-    
-    if st.button("🚀 Générer 2 Menus (Réaliste & Idéal)"):
-        st.session_state['generation_reussie'] = False
-        
-        with st.spinner("Chargement des données Notion..."):
-            try:
-                notion_data = load_notion_data(saison_selectionnee)
-                dataframes.update(notion_data)
-            except Exception as e:
-                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
-                return
-
-        with st.spinner("Vérification des colonnes..."):
-            try:
-                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
-                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
-                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
-            except ValueError as ve:
-                st.error(f"Erreur de données : {ve}")
-                return
-
-        with st.spinner("Génération des deux menus en cours..."):
-            try:
-                # Génération du menu réaliste (avec décrémentation du stock)
-                menu_generator_realiste = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=False
-                )
-                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
-                st.session_state['df_menu_realiste'] = df_menu_realiste
-                st.session_state['liste_courses_realiste'] = liste_courses_realiste
-
-                # Génération du menu idéal (sans décrémentation du stock)
-                menu_generator_ideal = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=True
-                )
-                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu()
-                st.session_state['df_menu_ideal'] = df_menu_ideal
-                st.session_state['liste_courses_ideal'] = liste_courses_ideal
-                
-                st.session_state['generation_reussie'] = True
-            except ValueError as ve:
-                st.error(f"Erreur de données lors de la génération : {ve}")
-                logger.exception("Erreur de données")
-            except Exception as e:
-                st.error(f"Une erreur inattendue est survenue lors de la génération : {e}")
-                logger.exception("Erreur inattendue")
-
-
-    if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
-        st.success("🎉 Menus générés avec succès !")
-
-        tab_realiste, tab_ideal = st.tabs(["Menu Réaliste", "Menu Idéal"])
-        
-        # --- Affichage dans l'onglet Menu Réaliste ---
-        with tab_realiste:
-            st.header("Menu Réaliste (avec décrémentation du stock)")
-            st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
-            st.dataframe(st.session_state['df_menu_realiste'])
-
-            col1, col2 = st.columns(2)
-            with col1:
-                # Bouton pour envoyer à Notion
-                if st.button("📤 Envoyer le menu RÉALISTE à Notion", key="send_realiste"):
-                    with st.spinner("Envoi du menu réaliste en cours..."):
+                if not st.session_state['df_menu_realiste'].empty:
+                    with st.spinner("Envoi du menu à Notion..."):
                         success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
                         if success > 0:
-                            st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-                        if failure > 0:
-                            st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-                        if success == 0 and failure == 0:
-                            st.info("Aucun repas valide à ajouter.")
+                            st.success(f"✅ Opération '1 clic' réussie ! {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
+                            if failure > 0:
+                                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés.")
+                            
+                    st.session_state['generation_reussie'] = True
+                else:
+                    st.error("❌ Échec de la génération de menu. Vérifiez vos données Notion.")
 
-            with col2:
-                df_export_realiste = st.session_state['df_menu_realiste'].copy()
-                df_export_realiste = df_export_realiste.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
-                    df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
-                df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
-                csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                
-                st.download_button(
-                    label="📥 Télécharger le menu RÉALISTE en CSV",
-                    data=csv_data_realiste,
-                    file_name="menu_realiste.csv",
-                    mime="text/csv"
-                )
-            
-            st.subheader("Liste de Courses Détaillée pour le Menu Réaliste")
-            if st.session_state['liste_courses_realiste']:
-                liste_courses_df_realiste = pd.DataFrame(st.session_state['liste_courses_realiste'])
-                st.dataframe(liste_courses_df_realiste)
-                csv_realiste = liste_courses_df_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button(
-                    label="Télécharger la liste de courses RÉALISTE (CSV)",
-                    data=csv_realiste,
-                    file_name="liste_courses_realiste.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses réaliste.")
-
-        # --- Affichage dans l'onglet Menu Idéal ---
-        with tab_ideal:
-            st.header("Menu Idéal (sans décrémentation du stock)")
-            st.write("Ce menu a été généré en partant du principe que vous avez toujours tout en stock. Il n'est pas contraint par la consommation des jours précédents.")
-            st.dataframe(st.session_state['df_menu_ideal'])
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                # Bouton pour envoyer à Notion
-                if st.button("📤 Envoyer le menu IDÉAL à Notion", key="send_ideal"):
-                    with st.spinner("Envoi du menu idéal en cours..."):
-                        success, failure = add_menu_to_notion(st.session_state['df_menu_ideal'], ID_MENUS)
-                        if success > 0:
-                            st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-                        if failure > 0:
-                            st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-                        if success == 0 and failure == 0:
-                            st.info("Aucun repas valide à ajouter.")
-
-            with col2:
-                df_export_ideal = st.session_state['df_menu_ideal'].copy()
-                df_export_ideal = df_export_ideal.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                if not pd.api.types.is_datetime64_any_dtype(df_export_ideal['Date']):
-                    df_export_ideal['Date'] = pd.to_datetime(df_export_ideal['Date'], errors='coerce')
-                df_export_ideal['Date'] = df_export_ideal['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                df_export_ideal = df_export_ideal[['Date', 'Participant(s)', 'Nom']]
-                csv_data_ideal = df_export_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                
-                st.download_button(
-                    label="📥 Télécharger le menu IDÉAL en CSV",
-                    data=csv_data_ideal,
-                    file_name="menu_ideal.csv",
-                    mime="text/csv"
-                )
-            
-            st.subheader("Liste de Courses Détaillée pour le Menu Idéal")
-            if st.session_state['liste_courses_ideal']:
-                liste_courses_df_ideal = pd.DataFrame(st.session_state['liste_courses_ideal'])
-                st.dataframe(liste_courses_df_ideal)
-                csv_ideal = liste_courses_df_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button(
-                    label="Télécharger la liste de courses IDÉALE (CSV)",
-                    data=csv_ideal,
-                    file_name="liste_courses_ideal.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses idéale.")
-
+        with tab2:
+            st.header("3. Afficher la liste de courses")
+            if st.session_state['generation_reussie']:
+                st.subheader("Liste de courses générée :")
+                liste_courses_df = pd.DataFrame(st.session_state['liste_courses_realiste'])
+                st.dataframe(liste_courses_df)
 
 if __name__ == "__main__":
     main()
