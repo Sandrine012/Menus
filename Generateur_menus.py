@@ -707,7 +707,8 @@ class MenuGenerator:
             COLONNE_NOM: nom_menu_str,
             "Participant(s)": participants_str_codes,
             "Remarques spécifiques": remarques_finales,
-            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
+            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-",
+            "Recette_ID": recette_id_str_pour_eval
         })
 
     def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
@@ -857,11 +858,12 @@ class MenuGenerator:
         if not df_menu_genere.empty:
             logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
             # Ajout de la colonne de l'ID de recette pour le traitement Notion
-            df_menu_genere['Recette_ID'] = [
-                self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_NOM] == row[COLONNE_NOM]][COLONNE_ID_RECETTE].iloc[0]
-                if row[COLONNE_NOM] in self.recette_manager.df_recettes[COLONNE_NOM].values else None
-                for _, row in df_menu_genere.iterrows()
-            ]
+            # La colonne est déjà ajoutée dans _ajouter_resultat, cette partie est inutile
+            # df_menu_genere['Recette_ID'] = [
+            #     self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_NOM] == row[COLONNE_NOM]][COLONNE_ID_RECETTE].iloc[0]
+            #     if row[COLONNE_NOM] in self.recette_manager.df_recettes[COLONNE_NOM].values else None
+            #     for _, row in df_menu_genere.iterrows()
+            # ]
             if 'Date' in df_menu_genere.columns:
                 df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
         
@@ -875,15 +877,21 @@ def add_menu_to_notion(df_menu, notion_db_id):
     failure_count = 0
     
     for _, row in df_menu.iterrows():
-        date_str = row['Date']
-        recette_id = row['Recette_ID']
-        nom_plat = row[COLONNE_NOM]
-        participants = row['Participant(s)']
+        # Utiliser .get pour éviter l'erreur si la colonne est manquante
+        recette_id = row.get('Recette_ID')
+        nom_plat = row.get(COLONNE_NOM)
+        participants = row.get('Participant(s)')
+        date_str = row.get('Date')
 
         # On ne tente pas d'ajouter les "restes" ou les repas non trouvés
-        if not recette_id or "Restes" in nom_plat or "Recette non trouvée" in nom_plat:
+        if not recette_id or "Restes" in str(nom_plat) or "Recette non trouvée" in str(nom_plat):
             continue
-
+        
+        if not date_str:
+            st.warning(f"Date invalide pour la ligne : {nom_plat}. L'enregistrement sera ignoré.")
+            failure_count += 1
+            continue
+            
         try:
             date_notion = datetime.strptime(date_str.split(' ')[0], '%Y-%m-%d').date().isoformat()
         except ValueError:
