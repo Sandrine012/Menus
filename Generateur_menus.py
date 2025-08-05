@@ -876,6 +876,9 @@ def add_menu_to_notion(df_menu, notion_db_id):
     success_count = 0
     failure_count = 0
     
+    # ID de la page 'Courses' pour la relation
+    COURSES_PAGE_ID = "1c66fa46f8b2809ca9b7c11ffaf1d582"
+
     for _, row in df_menu.iterrows():
         recette_id = row.get('Recette_ID')
         nom_plat = row.get(COLONNE_NOM)
@@ -909,6 +912,11 @@ def add_menu_to_notion(df_menu, notion_db_id):
                 "date": {
                     "start": date_notion
                 }
+            },
+            "Liste": {
+                "relation": [
+                    {"id": COURSES_PAGE_ID}
+                ]
             }
         }
         
