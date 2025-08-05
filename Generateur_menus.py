@@ -872,18 +872,7 @@ class MenuGenerator:
         return df_menu_genere, liste_courses_data
 
 # Nouvelle fonction pour envoyer les données à Notion
-
-
-# --- Streamlit UI ---
-
-@st.cache_data(show_spinner=False)
-def load_notion_data(saison_filtre_selection):
-    """
-    Charge les données de Notion. Utilise le cache Streamlit pour ne pas recharger.
-    """
-    st.sidebar.info("Chargement des données depuis Notion en cours...")
-    
-    with st.spinner("Chargement des Menus...def add_menu_to_notion(df_menu, notion_db_id):
+def add_menu_to_notion(df_menu, notion_db_id):
     success_count = 0
     failure_count = 0
     
@@ -959,7 +948,18 @@ def load_notion_data(saison_filtre_selection):
             logger.error(f"Erreur lors de l'envoi de la ligne '{nom_plat}' à Notion : {e}")
             failure_count += 1
             
-    return success_count, failure_count"):
+    return success_count, failure_count
+
+# --- Streamlit UI ---
+
+@st.cache_data(show_spinner=False)
+def load_notion_data(saison_filtre_selection):
+    """
+    Charge les données de Notion. Utilise le cache Streamlit pour ne pas recharger.
+    """
+    st.sidebar.info("Chargement des données depuis Notion en cours...")
+    
+    with st.spinner("Chargement des Menus..."):
         df_menus = extract_menus()
     st.sidebar.success("✅ Menus chargés.")
 
