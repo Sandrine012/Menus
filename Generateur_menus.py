@@ -123,8 +123,7 @@ def extract_menus():
 HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
 def extract_ingredients():
     rows=[]
-    for p in paginate(ID_INGREDIENTS,
-            filter={"property":"Type de stock","select":{"equals":"Autre type"}}):
+    for p in paginate(ID_INGREDIENTS):
         pr=p["properties"]
         u_prop = pr.get("unité",{})
         if u_prop.get("type")=="rich_text":
@@ -835,12 +834,28 @@ def load_notion_data():
     """
     if "notion_dataframes" not in st.session_state:
         st.session_state.notion_dataframes = {}
-        with st.spinner("Chargement initial des données depuis Notion (cela ne se fera qu'une seule fois)..."):
+        
+        # J'ai remplacé le spinner unique par des messages de progression détaillés
+        st.sidebar.info("Chargement des données depuis Notion en cours...")
+        
+        with st.spinner("Chargement des Menus..."):
             st.session_state.notion_dataframes["Menus"] = extract_menus()
+        st.sidebar.success("✅ Menus chargés.")
+
+        with st.spinner("Chargement des Recettes..."):
             st.session_state.notion_dataframes["Recettes"] = extract_recettes()
+        st.sidebar.success("✅ Recettes chargées.")
+
+        with st.spinner("Chargement des Ingrédients..."):
             st.session_state.notion_dataframes["Ingredients"] = extract_ingredients()
+        st.sidebar.success("✅ Ingrédients chargés.")
+
+        with st.spinner("Chargement des Ingrédients-Recettes..."):
             st.session_state.notion_dataframes["Ingredients_recettes"] = extract_ingr_rec()
-        st.sidebar.success("Données de Notion chargées avec succès.")
+        st.sidebar.success("✅ Ingrédients-Recettes chargés.")
+
+        st.sidebar.success("Toutes les données de Notion sont prêtes.")
+
     return st.session_state.notion_dataframes
 
 def main():
