@@ -8,38 +8,31 @@ from notion_client import Client
 from notion_client.errors import RequestTimeoutError, APIResponseError
 
 # ────── CONFIGURATION INITIALE ──────────────────────────────────
-# Configuration du logger pour Streamlit
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Constantes globales
 NB_JOURS_ANTI_REPETITION = 42
-
 COLONNE_NOM = "Nom"
 COLONNE_TEMPS_TOTAL = "Temps_total"
-COLONNE_ID_RECETTE = "Page_ID" # Utilisé comme ID pour Recettes et Ingredients_recettes
-COLONNE_ID_INGREDIENT = "Page_ID" # Utilisé comme ID pour Ingredients
+COLONNE_ID_RECETTE = "Page_ID"
+COLONNE_ID_INGREDIENT = "Page_ID"
 COLONNE_AIME_PAS_PRINCIP = "Aime_pas_princip"
-
 VALEUR_DEFAUT_TEMPS_PREPARATION = 10
 TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-# Ces lignes sont ajoutées depuis Generateur.py
 NOTION_API_KEY           = st.secrets["notion_api_key"]
 ID_RECETTES              = st.secrets["notion_database_id_recettes"]
 ID_MENUS                 = st.secrets["notion_database_id_menus"]
 ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
 ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
-
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
-
 notion = Client(auth=NOTION_API_KEY)
 
 # ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
-# Ces fonctions sont copiées depuis Generateur.py
 def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
@@ -65,7 +58,6 @@ def paginate(db_id, **kwargs):
             break
     return out
 
-# Fonctions d'extraction spécifiques copiées
 HDR_RECETTES = ["Page_ID","Nom","ID_Recette","Saison",
                 "Calories","Proteines","Temps_total",
                 "Aime_pas_princip","Type_plat","Transportable"]
@@ -134,7 +126,6 @@ def extract_ingredients():
     for p in paginate(ID_INGREDIENTS,
             filter={"property":"Type de stock","select":{"equals":"Autre type"}}):
         pr=p["properties"]
-        # unité : peut être rich_text ou select ou absent
         u_prop = pr.get("unité",{})
         if u_prop.get("type")=="rich_text":
             unite="".join(t["plain_text"] for t in u_prop["rich_text"])
@@ -180,7 +171,6 @@ def extract_ingr_rec():
     return pd.DataFrame(rows,columns=HDR_IR)
 
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
-
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
@@ -258,7 +248,6 @@ class RecetteManager:
                 try:
                     ing_id = str(ing.get("Ingrédient ok"))
                     if not ing_id or ing_id.lower() in ['nan', 'none', '']: continue
-
                     qte_str = str(ing.get("Qté/pers_s", "0")).replace(',', '.')
                     qte_par_personne = float(qte_str)
                     ingredients_necessaires[ing_id] = qte_par_personne * nb_personnes
@@ -555,11 +544,9 @@ class MenuGenerator:
                 continue
             
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
-                # Le log spécifique est déjà dans est_adaptee_aux_participants
                 continue
             
             if self.est_recente(recette_id_str_cand, date_repas):
-                # Le log spécifique est déjà dans est_recente
                 continue
 
             if nutrition_req == "equilibré":
@@ -647,7 +634,7 @@ class MenuGenerator:
                 logger.debug(f"Recette choisie parmi les préférées valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             else:
                 recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).") # Fallback, should ideally not happen if filtering is strict
+                logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if not recette_choisie_final:
             candidates_valides_motcle = []
@@ -663,7 +650,7 @@ class MenuGenerator:
                 logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             elif recettes_candidates_initiales:
                 recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
-                logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).") # Fallback
+                logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if recette_choisie_final:
             logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
@@ -674,7 +661,7 @@ class MenuGenerator:
     def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
         if recette_id_str is not None:
             nom_recette = self.recette_manager.obtenir_nom(recette_id_str)
-            adaptee = self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes) # This also logs
+            adaptee = self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
             temps_prep = self.recette_manager.obtenir_temps_preparation(recette_id_str)
             logger.debug(f"Décision rec {recette_id_str} ({nom_recette}): Adaptée={adaptee}, Temps={temps_prep} min")
         else:
@@ -697,7 +684,6 @@ class MenuGenerator:
 
     def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
         candidats_restes_ids = []
-        # Tri par date, le plus ancien en premier, ce qui est logique pour les restes
         sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
 
         logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
@@ -705,7 +691,6 @@ class MenuGenerator:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            # Correction sécurité : s'assurer que date_plat_orig est bien un datetime
             if isinstance(date_plat_orig, str):
                 date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
@@ -716,7 +701,7 @@ class MenuGenerator:
             
             logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
 
-            if not (0 < jours_ecoules <= 2): # Condition: planifié dans les 2 jours précédents
+            if not (0 < jours_ecoules <= 2):
                 logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
                 continue
             if plat_id_orig_str in repas_b_utilises_ids_list:
@@ -726,17 +711,16 @@ class MenuGenerator:
                 logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
                 continue
             
-            # Vérification explicite que la recette d'origine est marquée comme transportable
-            if not self.recette_manager.est_transportable(plat_id_orig_str): # Condition: transportable est 'oui'
+            if not self.recette_manager.est_transportable(plat_id_orig_str):
                 logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
                 continue
 
             candidats_restes_ids.append(plat_id_orig_str)
-            logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes (pas de filtrage anti-répétition pour les restes).")
+            logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
 
 
         if candidats_restes_ids:
-            plat_id_choisi_str = candidats_restes_ids[0] # Choisit le reste transportable le plus ancien et valide
+            plat_id_choisi_str = candidats_restes_ids[0]
             nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
             repas_b_utilises_ids_list.append(plat_id_choisi_str)
             logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
@@ -753,7 +737,6 @@ class MenuGenerator:
         used_recipes_current_generation_set = set()
         menu_recent_noms = []
         
-        # --- NOUVEAUX DICTIONNAIRES POUR LA LISTE DE COURSES DÉTAILLÉE ---
         ingredients_menu_cumules = {}
         
         for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
@@ -777,7 +760,7 @@ class MenuGenerator:
                 )
                 if recette_choisie_id:
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-            else: # Repas standard
+            else:
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                     menu_recent_noms, transportable_req, temps_req, nutrition_req
@@ -791,7 +774,6 @@ class MenuGenerator:
                     remarques_repas = "Aucune recette appropriée trouvée selon les critères."
 
             if recette_choisie_id:
-                # --- NOUVEAU : Calculer et cumuler les quantités nécessaires pour le menu
                 ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
                 for ing_id, qte_necessaire in ingredients_necessaires_ce_repas.items():
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
@@ -822,7 +804,6 @@ class MenuGenerator:
 
         df_menu_genere = pd.DataFrame(resultats_df_list)
 
-        # --- NOUVEAU : GÉNERER LA LISTE DE COURSES SOUS FORME DE TABLEAU ---
         liste_courses_data = []
         for ing_id, qte_menu in ingredients_menu_cumules.items():
             nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
@@ -842,13 +823,25 @@ class MenuGenerator:
             if 'Date' in df_menu_genere.columns:
                 df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
         
-        # Tri de la liste de courses par nom d'ingrédient
         liste_courses_data.sort(key=lambda x: x["Ingredient"])
 
         return df_menu_genere, liste_courses_data
 
-
 # --- Streamlit UI ---
+
+def load_notion_data():
+    """
+    Charge les données de Notion et les stocke dans la session_state pour éviter de les recharger.
+    """
+    if "notion_dataframes" not in st.session_state:
+        st.session_state.notion_dataframes = {}
+        with st.spinner("Chargement initial des données depuis Notion (cela ne se fera qu'une seule fois)..."):
+            st.session_state.notion_dataframes["Menus"] = extract_menus()
+            st.session_state.notion_dataframes["Recettes"] = extract_recettes()
+            st.session_state.notion_dataframes["Ingredients"] = extract_ingredients()
+            st.session_state.notion_dataframes["Ingredients_recettes"] = extract_ingr_rec()
+        st.sidebar.success("Données de Notion chargées avec succès.")
+    return st.session_state.notion_dataframes
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
@@ -858,7 +851,6 @@ def main():
     st.sidebar.header("Chargement des fichiers CSV")
     st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
     
-    # Fichier Planning.csv est le seul à charger manuellement
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
         "Uploader Planning.csv (votre planning de repas)", 
@@ -887,23 +879,14 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
-    # Chargement de l'historique des menus à partir de Notion via la nouvelle fonction
+    # --- NOUVEAU : Chargement de l'historique des menus à partir de Notion via la nouvelle fonction ---
     st.sidebar.subheader("Données chargées depuis Notion")
-
-    with st.spinner("Chargement des données depuis Notion..."):
-        try:
-            dataframes["Menus"] = extract_menus()
-            dataframes["Recettes"] = extract_recettes()
-            dataframes["Ingredients"] = extract_ingredients()
-            dataframes["Ingredients_recettes"] = extract_ingr_rec()
-
-            st.sidebar.success("Données de Notion chargées avec succès.")
-            if dataframes["Menus"].empty:
-                 st.sidebar.warning("Aucun historique de menu trouvé sur Notion.")
-        except Exception as e:
-            st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
-            return
-
+    try:
+        notion_data = load_notion_data()
+        dataframes.update(notion_data)
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
+        return
 
     # Vérification des colonnes essentielles après le chargement
     try:
@@ -912,7 +895,6 @@ def main():
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
         verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
         verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
-
     except ValueError:
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
         return
@@ -925,7 +907,6 @@ def main():
     if "Proteines" in dataframes["Recettes"].columns:
         dataframes["Recettes"]["Proteines"] = pd.to_numeric(dataframes["Recettes"]["Proteines"], errors='coerce')
 
-
     st.markdown("---")
     st.header("1. Générer le Menu")
     st.write("Cliquez sur le bouton ci-dessous pour générer le menu hebdomadaire et la liste de courses.")
@@ -933,7 +914,6 @@ def main():
     if st.button("🚀 Générer le Menu"):
         with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
             try:
-                # Initialisation de MenuGenerator avec les DataFrames chargés
                 menu_generator = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -973,7 +953,6 @@ def main():
 
                 st.header("3. Liste de Courses Détaillée")
                 if liste_courses:
-                    # Conversion de la liste de dictionnaires en DataFrame
                     liste_courses_df = pd.DataFrame(liste_courses)
                     st.dataframe(liste_courses_df)
 
