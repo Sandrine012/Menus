@@ -8,7 +8,6 @@ import os
 # ─── Clés d'authentification Notion ─────────────────────────────
 # IMPORTANT : Remplacez ces valeurs par vos propres clés et identifiants
 notion_api_key="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"
- 
 # ─── IDs des bases de données Notion ────────────────────────────
 # Seule la base de données des ingrédients est utilisée depuis Notion
 ID_INGREDIENTS = "b23b048b67334032ac1ae4e82d308817"
