@@ -97,7 +97,6 @@ def prop_val(p,k):
     if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
     return ""
 
-# J'ai ajouté l'argument saison_filtre pour le rendre dynamique
 def extract_recettes(saison_filtre):
     filt = {"and":[
         {"property":"Elément parent","relation":{"is_empty":True}},
@@ -615,7 +614,7 @@ class MenuGenerator:
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats généraux.")
         return candidates_triees[:10], recettes_ingredients_manquants
 
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, saison_selectionnee):
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
@@ -623,7 +622,7 @@ class MenuGenerator:
         )
         if not recettes_candidates_initiales:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
-            return None, {}
+            return None, {}, None
 
         recettes_historiques_semaine_set = self.recettes_meme_semaine_annees_precedentes(date_repas)
         scores_candidats_dispo = {
@@ -648,6 +647,7 @@ class MenuGenerator:
             return nom.lower().split()[0] if nom and nom.strip() and "Recette_ID_" not in nom else ""
 
         recette_choisie_final = None
+        raison_choix_final = ""
         if preferred_candidates_list:
             preferred_valides_motcle = []
             for r_id in preferred_candidates_list:
@@ -659,9 +659,11 @@ class MenuGenerator:
 
             if preferred_valides_motcle:
                 recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                raison_choix_final = "Préférence historique"
                 logger.debug(f"Recette choisie parmi les préférées valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             else:
                 recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                raison_choix_final = "Préférence historique (filtre mot-clé ignoré)"
                 logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if not recette_choisie_final:
@@ -675,16 +677,44 @@ class MenuGenerator:
 
             if candidates_valides_motcle:
                 recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                raison_choix_final = "Candidat général"
                 logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             elif recettes_candidates_initiales:
                 recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                raison_choix_final = "Candidat général (filtre mot-clé ignoré)"
                 logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if recette_choisie_final:
             logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
-            return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
+            
+            # Ajoutez la logique pour les raisons de choix ici
+            raisons_specifiques = []
+            if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_choisie_final):
+                raisons_specifiques.append("anti-gaspi")
+            if str(self.recette_manager.df_recettes.loc[recette_choisie_final, 'Saison']).strip() == saison_selectionnee or str(self.recette_manager.df_recettes.loc[recette_choisie_final, 'Saison']).strip() == "Toute l'année":
+                 raisons_specifiques.append("saison")
+            if transportable_req == "oui" and self.recette_manager.est_transportable(recette_choisie_final):
+                raisons_specifiques.append("transportable")
+            if temps_req == "express" and self.recette_manager.obtenir_temps_preparation(recette_choisie_final) <= TEMPS_MAX_EXPRESS:
+                raisons_specifiques.append("express")
+            if temps_req == "rapide" and self.recette_manager.obtenir_temps_preparation(recette_choisie_final) <= TEMPS_MAX_RAPIDE:
+                raisons_specifiques.append("rapide")
+            if nutrition_req == "equilibré":
+                try:
+                    calories = float(self.recette_manager.df_recettes.loc[recette_choisie_final, "Calories"])
+                    if calories <= REPAS_EQUILIBRE:
+                        raisons_specifiques.append("équilibré")
+                except (KeyError, ValueError, TypeError, IndexError):
+                    pass
+            
+            # Ajoutez une raison par défaut si aucune autre n'est trouvée.
+            if not raisons_specifiques:
+                raisons_specifiques.append("choix par défaut")
+
+            return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {}), raisons_specifiques
+            
         logger.debug(f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
-        return None, {}
+        return None, {}, []
 
     def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
         if recette_id_str is not None:
@@ -695,7 +725,7 @@ class MenuGenerator:
         else:
             logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
 
-    def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
+    def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str_codes, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None, raisons_choix=None):
         info_stock_str = ""
         if recette_id_str_pour_eval:
             score_dispo, pourcentage_dispo, _ = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_pour_eval, self.compter_participants(participants_str_codes))
@@ -707,7 +737,8 @@ class MenuGenerator:
             COLONNE_NOM: nom_menu_str,
             "Participant(s)": participants_str_codes,
             "Remarques spécifiques": remarques_finales,
-            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
+            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-",
+            "Raison_Choix": raisons_choix if raisons_choix else []
         })
 
     def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
@@ -752,13 +783,13 @@ class MenuGenerator:
             nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
             repas_b_utilises_ids_list.append(plat_id_choisi_str)
             logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
-            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
+            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé", ["reste"]
 
         logger.info("Pas de reste disponible trouvé pour ce Repas B.")
-        return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
+        return "Pas de reste disponible", None, "Aucun reste transportable trouvé", []
 
 
-    def generer_menu(self):
+    def generer_menu(self, saison_selectionnee):
         resultats_df_list = []
         repas_b_utilises_ids = []
         plats_transportables_semaine = {}
@@ -788,17 +819,18 @@ class MenuGenerator:
             nom_plat_final = "Erreur - Plat non défini"
             remarques_repas = ""
             temps_prep_final = 0
+            raisons_choix_repas = []
             
             if participants_str == "B":
-                nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
+                nom_plat_final, recette_choisie_id, remarques_repas, raisons_choix_repas = self.generer_menu_repas_b(
                     date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
                 )
                 if recette_choisie_id:
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
             else:
-                recette_choisie_id, _ = self._traiter_menu_standard(
+                recette_choisie_id, _, raisons_choix_repas = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                    menu_recent_noms, transportable_req, temps_req, nutrition_req
+                    menu_recent_noms, transportable_req, temps_req, nutrition_req, saison_selectionnee
                 )
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
@@ -828,7 +860,7 @@ class MenuGenerator:
 
             self._ajouter_resultat(
                 resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
-                remarques_repas, temps_prep_final, recette_choisie_id
+                remarques_repas, temps_prep_final, recette_choisie_id, raisons_choix_repas
             )
             
             if nom_plat_final and "Pas de recette" not in nom_plat_final and "Pas de reste" not in nom_plat_final and "Erreur" not in nom_plat_final and "Invalide" not in nom_plat_final:
@@ -898,6 +930,27 @@ def load_notion_data(saison_filtre_selection):
         st.sidebar.success("Toutes les données de Notion sont prêtes.")
 
     return st.session_state[cache_key]
+    
+# Nouvelle fonction pour ajouter les icônes
+def ajouter_icones_au_nom_plat(row):
+    nom_plat = row[COLONNE_NOM]
+    raisons = row.get("Raison_Choix", [])
+    icones = {
+        "saison": "🌿",
+        "anti-gaspi": "🗑️",
+        "express": "⏱️",
+        "rapide": "💨",
+        "équilibré": "⚖️",
+        "transportable": "🚗",
+        "reste": " leftovers", # Pas d'icône pour l'instant, juste un texte
+    }
+    
+    icones_str = " ".join([icones[raison] for raison in raisons if raison in icones])
+    
+    if nom_plat.startswith("Restes :"):
+        return f"{icones_str} {nom_plat}"
+    
+    return f"{nom_plat} {icones_str}".strip()
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
@@ -906,13 +959,12 @@ def main():
     
     st.sidebar.header("Paramètres")
     
-    # Ajout du filtre de saison avec la valeur par défaut automatique
     saison_actuelle = get_current_season()
     saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
     try:
         index_saison_defaut = saisons_disponibles.index(saison_actuelle)
     except ValueError:
-        index_saison_defaut = 0 # Par défaut si la saison est inconnue
+        index_saison_defaut = 0 
         
     saison_selectionnee = st.sidebar.selectbox(
         "Sélectionnez la saison:",
@@ -952,7 +1004,6 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
-    # --- NOUVEAU : Chargement de l'historique des menus à partir de Notion via la nouvelle fonction ---
     st.sidebar.subheader("Données chargées depuis Notion")
     try:
         notion_data = load_notion_data(saison_selectionnee)
@@ -961,9 +1012,8 @@ def main():
         st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
         return
 
-    # Vérification des colonnes essentielles après le chargement
     try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
+        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines", "Saison"], "Recettes")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
         verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
@@ -972,13 +1022,14 @@ def main():
         st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
         return
 
-    # Normalisation des colonnes numériques pour les dataframes Notion
     if "Temps_total" in dataframes["Recettes"].columns:
         dataframes["Recettes"]["Temps_total"] = pd.to_numeric(dataframes["Recettes"]["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
     if "Calories" in dataframes["Recettes"].columns:
         dataframes["Recettes"]["Calories"] = pd.to_numeric(dataframes["Recettes"]["Calories"], errors='coerce')
     if "Proteines" in dataframes["Recettes"].columns:
         dataframes["Recettes"]["Proteines"] = pd.to_numeric(dataframes["Recettes"]["Proteines"], errors='coerce')
+    if "Saison" in dataframes["Recettes"].columns:
+        dataframes["Recettes"]["Saison"] = dataframes["Recettes"]["Saison"].astype(str)
 
     st.markdown("---")
     st.header("1. Générer le Menu")
@@ -994,12 +1045,19 @@ def main():
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"]
                 )
-                df_menu_genere, liste_courses = menu_generator.generer_menu()
+                df_menu_genere, liste_courses = menu_generator.generer_menu(saison_selectionnee)
 
                 st.success("🎉 Menu généré avec succès !")
 
                 st.header("2. Menu Généré")
-                st.dataframe(df_menu_genere)
+                
+                # --- NOUVEAU : Création du DataFrame pour l'affichage avec les icônes
+                df_menu_genere_display = df_menu_genere.copy()
+                df_menu_genere_display[COLONNE_NOM] = df_menu_genere_display.apply(ajouter_icones_au_nom_plat, axis=1)
+                df_menu_genere_display = df_menu_genere_display.drop(columns=["Raison_Choix"])
+                
+                st.dataframe(df_menu_genere_display)
+                # --- FIN NOUVEAU
 
                 df_export = df_menu_genere.copy()
                 
@@ -1010,7 +1068,7 @@ def main():
                 })
                 
                 if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
-                    df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
+                    df_export['Date'] = pd.to_datetime(df_export['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
                 df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
                 
                 df_export = df_export[['Date', 'Participant(s)', 'Nom']]
