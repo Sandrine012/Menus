@@ -29,7 +29,11 @@ REPAS_EQUILIBRE = 700
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
 # Ces lignes sont ajoutées depuis Generateur.py
 NOTION_API_KEY           = st.secrets["notion_api_key"]
+ID_RECETTES              = st.secrets["notion_database_id_recettes"]
 ID_MENUS                 = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
+ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
+
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 
 notion = Client(auth=NOTION_API_KEY)
@@ -61,6 +65,48 @@ def paginate(db_id, **kwargs):
             break
     return out
 
+# Fonctions d'extraction spécifiques copiées
+HDR_RECETTES = ["Page_ID","Nom","ID_Recette","Saison",
+                "Calories","Proteines","Temps_total",
+                "Aime_pas_princip","Type_plat","Transportable"]
+MAP_REC = {
+    "Nom":("Nom_plat","title"), "ID_Recette":("ID_Recette","uid"),
+    "Saison":("Saison","ms"),   "Calories":("Calories Recette","roll"),
+    "Proteines":("Proteines Recette","roll"),
+    "Temps_total":("Temps_total","form"), "Aime_pas_princip":("Aime_pas_princip","rollstr"),
+    "Type_plat":("Type_plat","ms"), "Transportable":("Transportable","selcb")
+}
+SAISON_FILTRE = "Printemps"
+def prop_val(p,k):
+    if not p: return ""
+    t = p["type"]
+    if k=="title":   return "".join(x["plain_text"] for x in p["title"])
+    if k=="uid":     u=p["unique_id"]; pr,nu=u.get("prefix"),u.get("number"); return f"{pr}-{nu}" if pr else str(nu or "")
+    if k=="ms":      return ", ".join(o["name"] for o in p["multi_select"])
+    if k=="roll":    return str(p["rollup"].get("number") or "")
+    if k=="form":    fo=p["formula"]; return str(fo.get("number") or fo.get("string") or "")
+    if k=="rollstr": return ", ".join(it["formula"].get("string") or "." for it in p["rollup"]["array"])
+    if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
+    return ""
+def extract_recettes():
+    filt = {"and":[
+        {"property":"Elément parent","relation":{"is_empty":True}},
+        {"or":[
+            {"property":"Saison","multi_select":{"contains":"Toute l'année"}},
+            {"property":"Saison","multi_select":{"contains":SAISON_FILTRE}},
+            {"property":"Saison","multi_select":{"is_empty":True}}]},
+        {"or":[
+            {"property":"Type_plat","multi_select":{"contains":"Salade"}},
+            {"property":"Type_plat","multi_select":{"contains":"Soupe"}},
+            {"property":"Type_plat","multi_select":{"contains":"Plat"}}]}]}
+    rows=[]
+    for p in paginate(ID_RECETTES, filter=filt):
+        pr=p["properties"]; row=[p["id"]]
+        for col in HDR_RECETTES[1:]:
+            key,kind=MAP_REC[col]; row.append(prop_val(pr.get(key),kind))
+        rows.append(row)
+    return pd.DataFrame(rows,columns=HDR_RECETTES)
+
 HDR_MENUS = ["Nom Menu","Recette","Date"]
 def extract_menus():
     rows=[]
@@ -81,6 +127,58 @@ def extract_menus():
             d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
+
+HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
+def extract_ingredients():
+    rows=[]
+    for p in paginate(ID_INGREDIENTS,
+            filter={"property":"Type de stock","select":{"equals":"Autre type"}}):
+        pr=p["properties"]
+        # unité : peut être rich_text ou select ou absent
+        u_prop = pr.get("unité",{})
+        if u_prop.get("type")=="rich_text":
+            unite="".join(t["plain_text"] for t in u_prop["rich_text"])
+        elif u_prop.get("type")=="select":
+            unite=(u_prop["select"] or {}).get("name","")
+        else:
+            unite=""
+        qte_prop = pr.get("Qte reste", {})
+        qte = ""
+        if qte_prop.get("type") == "formula":
+            formula_result = qte_prop.get("formula", {})
+            if formula_result.get("type") == "number":
+                qte = formula_result.get("number")
+        rows.append([
+            p["id"],
+            "".join(t["plain_text"] for t in pr["Nom"]["title"]),
+            (pr["Type de stock"]["select"] or {}).get("name",""),
+            unite,
+            str(qte or "")
+        ])
+    return pd.DataFrame(rows,columns=HDR_INGR)
+
+HDR_IR = ["Page_ID","Qté/pers_s","Ingrédient ok","Type de stock f"]
+def extract_ingr_rec():
+    rows=[]
+    for p in paginate(ID_INGREDIENTS_RECETTES,
+            filter={"property":"Type de stock f","formula":{"string":{"equals":"Autre type"}}}):
+        pr=p["properties"]
+        parent = pr.get("Elément parent",{})
+        pid = ""
+        if parent and parent["type"]=="relation" and parent["relation"]:
+            pid = parent["relation"][0]["id"]
+        if not pid:
+            pid = p["id"]
+        qte = pr["Qté/pers_s"]["number"]
+        if qte and qte>0:
+            rows.append([
+                pid,
+                str(qte),
+                ", ".join(r["id"] for r in pr["Ingrédient ok"]["relation"]),
+                pr["Type de stock f"]["formula"]["string"] or ""
+            ])
+    return pd.DataFrame(rows,columns=HDR_IR)
+
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
 
 
@@ -768,103 +866,75 @@ def main():
     st.markdown("---")
 
     st.sidebar.header("Chargement des fichiers CSV")
-    st.sidebar.info("Veuillez charger les fichiers CSV nécessaires.")
-
-    uploaded_files = {}
+    st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
     
-    # Grouper les fichiers "Recettes" et "Ingredients_recettes"
-    st.sidebar.subheader("Fichiers de Recettes")
-    uploaded_files["Recettes.csv"] = st.sidebar.file_uploader(
-        "Uploader Recettes.csv (informations sur les recettes)", 
-        type="csv", 
-        key="Recettes.csv"
-    )
-    uploaded_files["Ingredients_recettes.csv"] = st.sidebar.file_uploader(
-        "Uploader Ingredients_recettes.csv (ingrédients par recette)", 
-        type="csv", 
-        key="Ingredients_recettes.csv"
-    )
-
-    st.sidebar.subheader("Autres Fichiers")
+    # Fichier Planning.csv est le seul à charger manuellement
+    uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
         "Uploader Planning.csv (votre planning de repas)", 
         type="csv", 
         key="Planning.csv"
     )
-    # L'uploader pour Menus.csv est commenté pour ne plus le charger
-    # uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
-    #     "Uploader Menus.csv (historique de vos menus)", 
-    #     type="csv", 
-    #     key="Menus.csv"
-    # )
-    uploaded_files["Ingredients.csv"] = st.sidebar.file_uploader(
-        "Uploader Ingredients.csv (liste de vos ingrédients et stock)", 
-        type="csv", 
-        key="Ingredients.csv"
-    )
 
-    dataframes = {}
-    # On vérifie que les 4 fichiers nécessaires (hors Menus.csv) sont présents
-    required_files = ["Recettes.csv", "Ingredients_recettes.csv", "Planning.csv", "Ingredients.csv"]
-    all_files_uploaded = all(uploaded_files.get(f) is not None for f in required_files)
-    
-    if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV nécessaires (Recettes, Ingredients_recettes, Planning, Ingredients) pour continuer.")
+    if uploaded_files["Planning.csv"] is None:
+        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
         return
 
-    # Chargement des fichiers uploadés
-    for file_name, uploaded_file in uploaded_files.items():
-        if uploaded_file is not None:
-            try:
-                if file_name == "Planning.csv":
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(
-                        uploaded_file,
-                        encoding='utf-8',
-                        sep=';',
-                        parse_dates=['Date'],
-                        dayfirst=True
-                    )
-                else:
-                    df = pd.read_csv(uploaded_file, encoding='utf-8')
-                
-                if "Temps_total" in df.columns:
-                    df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-                if "Calories" in df.columns:
-                    df["Calories"] = pd.to_numeric(df["Calories"], errors='coerce')
-                if "Proteines" in df.columns:
-                    df["Proteines"] = pd.to_numeric(df["Proteines"], errors='coerce')
+    dataframes = {}
 
-                dataframes[file_name.replace(".csv", "")] = df
-                st.sidebar.success(f"{file_name} chargé avec succès.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                return # Arrêter l'exécution si un fichier a une erreur de chargement
+    try:
+        uploaded_files["Planning.csv"].seek(0)
+        df_planning = pd.read_csv(
+            uploaded_files["Planning.csv"],
+            encoding='utf-8',
+            sep=';',
+            parse_dates=['Date'],
+            dayfirst=True
+        )
+        dataframes["Planning"] = df_planning
+        st.sidebar.success("Planning.csv chargé avec succès.")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+        return
 
-    # Chargement des menus à partir de Notion via la nouvelle fonction
-    with st.spinner("Chargement de l'historique des menus depuis Notion..."):
+    # Chargement de l'historique des menus à partir de Notion via la nouvelle fonction
+    st.sidebar.subheader("Données chargées depuis Notion")
+
+    with st.spinner("Chargement des données depuis Notion..."):
         try:
-            df_menus_from_notion = extract_menus()
-            dataframes["Menus"] = df_menus_from_notion
-            st.sidebar.success("Historique des menus chargé depuis Notion avec succès.")
-            if df_menus_from_notion.empty:
+            dataframes["Menus"] = extract_menus()
+            dataframes["Recettes"] = extract_recettes()
+            dataframes["Ingredients"] = extract_ingredients()
+            dataframes["Ingredients_recettes"] = extract_ingr_rec()
+
+            st.sidebar.success("Données de Notion chargées avec succès.")
+            if dataframes["Menus"].empty:
                  st.sidebar.warning("Aucun historique de menu trouvé sur Notion.")
         except Exception as e:
-            st.sidebar.error(f"Erreur lors de la récupération de l'historique des menus depuis Notion : {e}")
+            st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
             return
 
 
     # Vérification des colonnes essentielles après le chargement
     try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
+        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
-        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
+        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
+        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
 
     except ValueError:
-        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
+        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
         return
+
+    # Normalisation des colonnes numériques pour les dataframes Notion
+    if "Temps_total" in dataframes["Recettes"].columns:
+        dataframes["Recettes"]["Temps_total"] = pd.to_numeric(dataframes["Recettes"]["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
+    if "Calories" in dataframes["Recettes"].columns:
+        dataframes["Recettes"]["Calories"] = pd.to_numeric(dataframes["Recettes"]["Calories"], errors='coerce')
+    if "Proteines" in dataframes["Recettes"].columns:
+        dataframes["Recettes"]["Proteines"] = pd.to_numeric(dataframes["Recettes"]["Proteines"], errors='coerce')
+
 
     st.markdown("---")
     st.header("1. Générer le Menu")
