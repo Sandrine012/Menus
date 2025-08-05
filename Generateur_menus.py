@@ -1,8 +1,6 @@
-import pandas as pd
-import requests
-import json
-import random
 import streamlit as st
+import pandas as pd
+import random
 import logging
 from datetime import datetime, timedelta
 import time, httpx
@@ -418,6 +416,41 @@ class MenuGenerator:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
+    def trouver_restes_transportables(self, date_repas, used_recipes_in_current_gen):
+        """Trouve une recette transportable cuisinée dans les 2 jours précédents."""
+        df_hist = self.menus_history_manager.df_menus_historique
+        if df_hist.empty:
+            return None
+
+        deux_jours_avant = date_repas - timedelta(days=2)
+        
+        # Filtrer l'historique pour les recettes des 2 derniers jours
+        recettes_recentes = df_hist[
+            (df_hist['Date'] >= deux_jours_avant) &
+            (df_hist['Date'] < date_repas) &
+            (df_hist['Recette'] != "Pas de recette")
+        ]
+
+        if recettes_recentes.empty:
+            logger.debug(f"Aucune recette récente transportable trouvée pour le {date_repas.strftime('%Y-%m-%d')}")
+            return None
+
+        # Reste à trouver les recettes transportables parmi celles-ci
+        recettes_candidates = []
+        for _, row in recettes_recentes.iterrows():
+            recette_id = row['Recette']
+            if self.recette_manager.est_transportable(recette_id):
+                if recette_id not in used_recipes_in_current_gen:
+                    recettes_candidates.append(recette_id)
+        
+        if not recettes_candidates:
+            logger.debug(f"Aucune recette transportable trouvée parmi les repas récents pour le {date_repas.strftime('%Y-%m-%d')}")
+            return None
+
+        recette_choisie_id = random.choice(recettes_candidates)
+        logger.debug(f"Recette de reste transportable choisie : {self.recette_manager.obtenir_nom(recette_choisie_id)}")
+        return recette_choisie_id
+
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str):
             return 1
@@ -481,27 +514,39 @@ class MenuGenerator:
             participants = row.get("Participants", "")
             type_repas = row.get("Type_de_repas", "")
             
-            recettes_candidates, anti_gaspi_candidates, recettes_scores_dispo, recettes_ingredients_manquants = self.generer_recettes_candidates(
-                date_repas,
-                participants,
-                used_recipes,
-                row.get("Transportable", ""),
-                row.get("Temps", ""),
-                row.get("Nutrition", "")
-            )
-            
-            if anti_gaspi_candidates:
-                recette_choisie_id = random.choice(anti_gaspi_candidates)
-            elif recettes_candidates:
-                recette_choisie_id = random.choice(recettes_candidates)
-            else:
-                recette_choisie_id = "Pas de recette"
+            recette_choisie_id = "Pas de recette"
+            nom_recette = "Pas de recette"
+            recettes_scores_dispo = {}
+            recettes_ingredients_manquants = {}
 
-            if recette_choisie_id != "Pas de recette":
-                used_recipes.add(recette_choisie_id)
-                self.recette_manager.decrementer_stock(recette_choisie_id, self.compter_participants(participants), date_repas)
-            
-            nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id) if recette_choisie_id != "Pas de recette" else "Pas de recette"
+            # Logique spécifique pour les "Restes"
+            if participants.strip() == "B":
+                recette_choisie_id = self.trouver_restes_transportables(date_repas, used_recipes)
+                if recette_choisie_id:
+                    nom_recette = f"Restes : {self.recette_manager.obtenir_nom(recette_choisie_id)}"
+                    used_recipes.add(recette_choisie_id)
+                else:
+                    nom_recette = "Pas de restes transportables récents"
+            else:
+                recettes_candidates, anti_gaspi_candidates, recettes_scores_dispo, recettes_ingredients_manquants = self.generer_recettes_candidates(
+                    date_repas,
+                    participants,
+                    used_recipes,
+                    row.get("Transportable", ""),
+                    row.get("Temps", ""),
+                    row.get("Nutrition", "")
+                )
+                
+                if anti_gaspi_candidates:
+                    recette_choisie_id = random.choice(anti_gaspi_candidates)
+                elif recettes_candidates:
+                    recette_choisie_id = random.choice(recettes_candidates)
+                
+                if recette_choisie_id != "Pas de recette":
+                    used_recipes.add(recette_choisie_id)
+                    self.recette_manager.decrementer_stock(recette_choisie_id, self.compter_participants(participants), date_repas)
+                
+                nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id) if recette_choisie_id != "Pas de recette" else "Pas de recette"
             
             planning_genere.append({
                 "Date": date_repas,
