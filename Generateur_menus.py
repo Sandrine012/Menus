@@ -132,14 +132,12 @@ def extract_ingredients():
             unite=(u_prop["select"] or {}).get("name","")
         else:
             unite=""
-        # --- DÉBUT DE LA CORRECTION ---
         qte_prop = pr.get("Qte reste", {})
         qte = ""
         if qte_prop.get("type") == "formula":
             formula_result = qte_prop.get("formula", {})
             if formula_result.get("type") == "number":
                 qte = formula_result.get("number")
-        # --- FIN DE LA CORRECTION ---
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
@@ -375,6 +373,17 @@ class RecetteManager:
             return 0.0
         except Exception as e:
             logger.error(f"Erreur obtenir_qte_stock_par_id pour {ing_page_id_str}: {e}")
+            return 0.0
+
+    def obtenir_qte_stock_initial_par_id(self, ing_page_id_str):
+        try:
+            ing_page_id_str = str(ing_page_id_str)
+            qte_stock = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Qte reste'].iloc[0]
+            return float(qte_stock)
+        except (IndexError, KeyError, ValueError):
+            return 0.0
+        except Exception as e:
+            logger.error(f"Erreur obtenir_qte_stock_initial_par_id pour {ing_page_id_str}: {e}")
             return 0.0
 
     def est_adaptee_aux_participants(self, recette_page_id_str, participants_str_codes):
@@ -740,6 +749,13 @@ class MenuGenerator:
         
         ingredients_menu_cumules = {}
         
+        # J'ai ajouté une variable pour le stock initial
+        initial_stock_values = {
+            row[COLONNE_ID_INGREDIENT]: float(row["Qte reste"])
+            for _, row in self.recette_manager.df_ingredients_initial.iterrows()
+            if row["Qte reste"].replace('.', '', 1).isdigit()
+        }
+
         for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
             date_repas_dt = repas_planning_row["Date"]
             participants_str = str(repas_planning_row["Participants"])
@@ -808,14 +824,17 @@ class MenuGenerator:
         liste_courses_data = []
         for ing_id, qte_menu in ingredients_menu_cumules.items():
             nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
-            qte_stock = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
+            # Récupération de la Qte reste initiale et simulée
+            qte_stock_initial = self.recette_manager.obtenir_qte_stock_initial_par_id(ing_id)
+            qte_stock_simule = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
             unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
-            qte_acheter = max(0, qte_menu - qte_stock)
+            qte_acheter = max(0, qte_menu - qte_stock_initial)
 
             liste_courses_data.append({
                 "Ingredient": f"{nom_ing} ({unite})",
                 "Quantité du menu": f"{qte_menu:.2f}",
-                "Quantité stock": f"{qte_stock:.2f}",
+                "Qte reste (initiale)": f"{qte_stock_initial:.2f}",
+                "Qte reste (simulée)": f"{qte_stock_simule:.2f}",
                 "Quantité à acheter": f"{qte_acheter:.2f}"
             })
 
@@ -959,7 +978,7 @@ def main():
                 
                 df_export = df_export[['Date', 'Participant(s)', 'Nom']]
                 
-                csv_data = df_export.to_csv(index=False, sep=',', encoding='utf-8-sig')
+                csv_data = df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 
                 st.download_button(
                     label="📥 Télécharger le menu en CSV",
