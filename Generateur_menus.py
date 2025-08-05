@@ -693,7 +693,7 @@ class MenuGenerator:
         # Convertir la liste de courses en un format plus simple pour le retour
         formatted_liste_courses = []
         for ing, qte_unite in liste_courses_final.items():
-        formatted_liste_courses.append(f"{ing}: {qte_unite}")
+            formatted_liste_courses.append(f"{ing}: {qte_unite}")
         formatted_liste_courses.sort() # Tri alphabétique
 
         return df_menu_genere, formatted_liste_courses
@@ -710,36 +710,9 @@ def main():
     st.sidebar.info("Veuillez charger tous les fichiers CSV nécessaires.")
 
     uploaded_files = {}
-    
-    # Grouper les fichiers "Recettes" et "Ingredients_recettes"
-    st.sidebar.subheader("Fichiers de Recettes")
-    uploaded_files["Recettes.csv"] = st.sidebar.file_uploader(
-        "Uploader Recettes.csv (informations sur les recettes)", 
-        type="csv", 
-        key="Recettes.csv"
-    )
-    uploaded_files["Ingredients_recettes.csv"] = st.sidebar.file_uploader(
-        "Uploader Ingredients_recettes.csv (ingrédients par recette)", 
-        type="csv", 
-        key="Ingredients_recettes.csv"
-    )
-
-    st.sidebar.subheader("Autres Fichiers")
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
-    )
-    uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
-        "Uploader Menus.csv (historique de vos menus)", 
-        type="csv", 
-        key="Menus.csv"
-    )
-    uploaded_files["Ingredients.csv"] = st.sidebar.file_uploader(
-        "Uploader Ingredients.csv (liste de vos ingrédients et stock)", 
-        type="csv", 
-        key="Ingredients.csv"
-    )
+    file_names = ["Recettes.csv", "Planning.csv", "Menus.csv", "Ingredients.csv", "Ingredients_recettes.csv"]
+    for file_name in file_names:
+        uploaded_files[file_name] = st.sidebar.file_uploader(f"Uploader {file_name}", type="csv", key=file_name)
 
     dataframes = {}
     all_files_uploaded = True
@@ -758,7 +731,9 @@ def main():
                     )
                 else:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
-                
+                # ...
+
+
                 # Assurer que les colonnes sont du bon type si nécessaire, par exemple pour "Temps_total"
                 if "Temps_total" in df.columns:
                     df["Temps_total"] = pd.to_numeric(df["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
@@ -815,6 +790,8 @@ def main():
 
                 st.header("2. Menu Généré")
                 st.dataframe(df_menu_genere)
+
+                # Suppose que df_menu_genere est ton DataFrame de menu après génération
 
                 # Ajuste l'ordre et les noms des colonnes pour correspondre exactement à l’exemple CSV
                 df_export = df_menu_genere.copy()
