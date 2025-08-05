@@ -132,14 +132,12 @@ def extract_ingredients():
             unite=(u_prop["select"] or {}).get("name","")
         else:
             unite=""
-        # --- DÉBUT DE LA CORRECTION ---
         qte_prop = pr.get("Qte reste", {})
         qte = ""
         if qte_prop.get("type") == "formula":
             formula_result = qte_prop.get("formula", {})
             if formula_result.get("type") == "number":
                 qte = formula_result.get("number")
-        # --- FIN DE LA CORRECTION ---
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
@@ -187,15 +185,22 @@ class RecetteManager:
         if COLONNE_ID_RECETTE in self.df_recettes.columns and not self.df_recettes.index.name == COLONNE_ID_RECETTE:
             self.df_recettes = self.df_recettes.set_index(COLONNE_ID_RECETTE, drop=False)
 
-        self.df_ingredients_initial = df_ingredients.copy()
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
 
-        self.stock_simule = self.df_ingredients_initial.copy()
-        if "Qte reste" in self.stock_simule.columns:
-            self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
+        # Stock initial pour l'affichage final (ne change jamais)
+        self.stock_initial = df_ingredients.copy()
+        if "Qte reste" in self.stock_initial.columns:
+            self.stock_initial["Qte reste"] = pd.to_numeric(self.stock_initial["Qte reste"], errors='coerce').fillna(0.0).astype(float)
         else:
-            logger.error("'Qte reste' manquante dans df_ingredients pour stock_simule.")
-            self.stock_simule["Qte reste"] = 0.0
+            logger.error("'Qte reste' manquante dans df_ingredients pour stock_initial.")
+            self.stock_initial["Qte reste"] = 0.0
+
+        # Stock simulé pour la génération du menu (est décrémenté)
+        self.stock_simule = self.stock_initial.copy()
+
+        # Indexer les deux DataFrames pour un accès plus rapide
+        self.stock_initial = self.stock_initial.set_index(COLONNE_ID_INGREDIENT)
+        self.stock_simule = self.stock_simule.set_index(COLONNE_ID_INGREDIENT)
 
         self.anti_gaspi_ingredients = self._trouver_ingredients_stock_eleve()
 
@@ -214,18 +219,18 @@ class RecetteManager:
         seuil_gr = 100
         seuil_pc = 1
         ingredients_stock = {}
-        if not all(col in self.stock_simule.columns for col in ["Qte reste", "unité", COLONNE_ID_INGREDIENT, "Nom"]):
+        # Utilise le stock simulé pour la logique anti-gaspi car elle est basée sur l'état actuel
+        if not all(col in self.stock_simule.columns for col in ["Qte reste", "unité", "Nom"]):
             logger.warning("Colonnes manquantes dans stock_simule pour _trouver_ingredients_stock_eleve.")
             return {}
 
-        for _, row in self.stock_simule.iterrows():
+        for ing_id, row in self.stock_simule.iterrows():
             try:
                 qte = float(str(row["Qte reste"]).replace(",", "."))
                 unite = str(row["unité"]).lower()
-                page_id = str(row[COLONNE_ID_INGREDIENT])
                 if (unite in ["gr", "g", "ml", "cl"] and qte >= seuil_gr) or \
                    (unite in ["pc", "tranches"] and qte >= seuil_pc):
-                    ingredients_stock[page_id] = row["Nom"]
+                    ingredients_stock[ing_id] = row["Nom"]
             except (ValueError, KeyError) as e:
                 logger.debug(f"Erreur dans _trouver_ingredients_stock_eleve pour ligne {row.get('Nom', 'ID inconnu')}: {e}")
                 continue
@@ -271,16 +276,16 @@ class RecetteManager:
 
         for ing_id, qte_necessaire in ingredients_necessaires.items():
             ing_id_str = str(ing_id)
-            ing_stock_df = self.stock_simule[self.stock_simule[COLONNE_ID_INGREDIENT].astype(str) == ing_id_str]
-
-            qte_en_stock = 0.0
-            if not ing_stock_df.empty:
+            # Utilise le stock simulé pour évaluer la disponibilité
+            if ing_id_str not in self.stock_simule.index:
+                qte_en_stock = 0.0
+                logger.debug(f"Ingrédient {ing_id_str} (recette {recette_id_str}) non trouvé dans stock_simule.")
+            else:
                 try:
-                    qte_en_stock = float(ing_stock_df["Qte reste"].iloc[0])
+                    qte_en_stock = float(self.stock_simule.loc[ing_id_str, "Qte reste"])
                 except (ValueError, IndexError, KeyError) as e:
                     logger.error(f"Erreur lecture stock pour {ing_id_str} rec {recette_id_str}: {e}")
-            else:
-                logger.debug(f"Ingrédient {ing_id_str} (recette {recette_id_str}) non trouvé dans stock_simule.")
+                    qte_en_stock = 0.0
 
             ratio_dispo = 0.0
             if qte_necessaire > 0:
@@ -306,18 +311,16 @@ class RecetteManager:
 
         for ing_id, qte_necessaire in ingredients_necessaires.items():
             ing_id_str = str(ing_id)
-            idx_list = self.stock_simule.index[self.stock_simule[COLONNE_ID_INGREDIENT].astype(str) == ing_id_str].tolist()
-            if not idx_list:
+            if ing_id_str not in self.stock_simule.index:
                 logger.debug(f"Ingrédient {ing_id_str} (recette {recette_id_str}) non trouvé dans stock_simule pour décrémentation.")
                 continue
-            idx = idx_list[0]
 
             try:
-                qte_actuelle = float(self.stock_simule.loc[idx, "Qte reste"])
+                qte_actuelle = float(self.stock_simule.loc[ing_id_str, "Qte reste"])
                 if qte_actuelle > 0 and qte_necessaire > 0:
                     qte_a_consommer = min(qte_actuelle, qte_necessaire)
                     nouvelle_qte = qte_actuelle - qte_a_consommer
-                    self.stock_simule.loc[idx, "Qte reste"] = nouvelle_qte
+                    self.stock_simule.loc[ing_id_str, "Qte reste"] = nouvelle_qte
 
                     if qte_a_consommer > 0:
                         ingredients_consommes_ids.add(ing_id_str)
@@ -331,10 +334,7 @@ class RecetteManager:
     def obtenir_nom(self, recette_page_id_str):
         try:
             recette_page_id_str = str(recette_page_id_str)
-            if self.df_recettes.index.name == COLONNE_ID_RECETTE:
-                return self.df_recettes.loc[recette_page_id_str, COLONNE_NOM]
-            else:
-                return self.df_recettes[self.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_page_id_str][COLONNE_NOM].iloc[0]
+            return self.df_recettes.loc[recette_page_id_str, COLONNE_NOM]
         except (KeyError, IndexError):
             logger.warning(f"Recette ID {recette_page_id_str} non trouvé dans df_recettes (obtenir_nom).")
             return f"Recette_ID_{recette_page_id_str}"
@@ -345,11 +345,12 @@ class RecetteManager:
     def obtenir_nom_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            nom = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
-            return nom
-        except (IndexError, KeyError):
-            logger.warning(f"Nom introuvable pour ingrédient ID: {ing_page_id_str} dans df_ingredients_initial.")
-            return f"ID_Ing_{ing_page_id_str}"
+            # Utilise le stock initial
+            if ing_page_id_str in self.stock_initial.index:
+                return self.stock_initial.loc[ing_page_id_str, 'Nom']
+            else:
+                logger.warning(f"Nom introuvable pour ingrédient ID: {ing_page_id_str} dans stock_initial.")
+                return f"ID_Ing_{ing_page_id_str}"
         except Exception as e:
             logger.error(f"Erreur obtenir_nom_ingredient_par_id pour {ing_page_id_str}: {e}")
             return None
@@ -357,11 +358,12 @@ class RecetteManager:
     def obtenir_unite_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            unite = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'unité'].iloc[0]
-            return unite
-        except (IndexError, KeyError):
-            logger.warning(f"Unité introuvable pour ingrédient ID: {ing_page_id_str} dans df_ingredients_initial.")
-            return None
+            # Utilise le stock initial
+            if ing_page_id_str in self.stock_initial.index:
+                return self.stock_initial.loc[ing_page_id_str, 'unité']
+            else:
+                logger.warning(f"Unité introuvable pour ingrédient ID: {ing_page_id_str} dans stock_initial.")
+                return None
         except Exception as e:
             logger.error(f"Erreur obtenir_unite_ingredient_par_id pour {ing_page_id_str}: {e}")
             return None
@@ -369,7 +371,11 @@ class RecetteManager:
     def obtenir_qte_stock_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            qte_stock = self.stock_simule.loc[self.stock_simule[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Qte reste'].iloc[0]
+            # 
+            # --- MODIFICATION CLÉ ---
+            #
+            # Utilisez le stock INITIAL pour la liste de courses
+            qte_stock = self.stock_initial.loc[ing_page_id_str, 'Qte reste']
             return float(qte_stock)
         except (IndexError, KeyError, ValueError):
             return 0.0
@@ -380,11 +386,7 @@ class RecetteManager:
     def est_adaptee_aux_participants(self, recette_page_id_str, participants_str_codes):
         try:
             recette_page_id_str = str(recette_page_id_str)
-            if self.df_recettes.index.name == COLONNE_ID_RECETTE:
-                recette_info = self.df_recettes.loc[recette_page_id_str]
-            else:
-                recette_info = self.df_recettes[self.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_page_id_str].iloc[0]
-
+            recette_info = self.df_recettes.loc[recette_page_id_str]
             if COLONNE_AIME_PAS_PRINCIP not in recette_info or pd.isna(recette_info[COLONNE_AIME_PAS_PRINCIP]):
                 return True
             n_aime_pas = [code.strip() for code in str(recette_info[COLONNE_AIME_PAS_PRINCIP]).split(",") if code.strip()]
@@ -404,10 +406,7 @@ class RecetteManager:
     def est_transportable(self, recette_page_id_str):
         try:
             recette_page_id_str = str(recette_page_id_str)
-            if self.df_recettes.index.name == COLONNE_ID_RECETTE:
-                valeur = str(self.df_recettes.loc[recette_page_id_str, "Transportable"]).strip().lower()
-            else:
-                valeur = str(self.df_recettes[self.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_page_id_str]["Transportable"].iloc[0]).strip().lower()
+            valeur = str(self.df_recettes.loc[recette_page_id_str, "Transportable"]).strip().lower()
             
             is_transportable = (valeur == "oui")
             if not is_transportable:
@@ -423,11 +422,7 @@ class RecetteManager:
     def obtenir_temps_preparation(self, recette_page_id_str):
         try:
             recette_page_id_str = str(recette_page_id_str)
-            if self.df_recettes.index.name == COLONNE_ID_RECETTE:
-                recette_info = self.df_recettes.loc[recette_page_id_str]
-            else:
-                recette_info = self.df_recettes[self.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_page_id_str].iloc[0]
-
+            recette_info = self.df_recettes.loc[recette_page_id_str]
             if COLONNE_TEMPS_TOTAL in recette_info and pd.notna(recette_info[COLONNE_TEMPS_TOTAL]):
                 return int(recette_info[COLONNE_TEMPS_TOTAL])
             return VALEUR_DEFAUT_TEMPS_PREPARATION
@@ -552,10 +547,7 @@ class MenuGenerator:
 
             if nutrition_req == "equilibré":
                 try:
-                    if self.recette_manager.df_recettes.index.name == COLONNE_ID_RECETTE:
-                        calories = float(self.recette_manager.df_recettes.loc[recette_id_str_cand, "Calories"])
-                    else:
-                        calories = float(self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_id_str_cand]["Calories"].iloc[0])
+                    calories = float(self.recette_manager.df_recettes.loc[recette_id_str_cand, "Calories"])
                     if calories > REPAS_EQUILIBRE:
                         logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({REPAS_EQUILIBRE}).")
                         continue
@@ -676,288 +668,204 @@ class MenuGenerator:
 
         remarques_finales = f"{remarques_str} {info_stock_str}".strip()
         resultats_liste.append({
-            "Date": date_repas.strftime("%d/%m/%Y %H:%M"),
-            COLONNE_NOM: nom_menu_str,
+            "Date": date_repas.strftime("%d/%m/%Y"),
+            "Repas": nom_menu_str,
             "Participant(s)": participants_str_codes,
-            "Remarques spécifiques": remarques_finales,
-            "Temps de préparation": f"{temps_prep_int} min" if temps_prep_int else "-"
+            "Temps total (min)": temps_prep_int,
+            "Recette_ID": recette_id_str_pour_eval,
+            "Remarques": remarques_finales
         })
-
-    def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
-        candidats_restes_ids = []
-        sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
-
-        logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
-        if not sorted_plats_transportables:
-            logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
-            
-        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            if isinstance(date_plat_orig, str):
-                date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
-            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
-            
-        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
-            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
-            
-            logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
-
-            if not (0 < jours_ecoules <= 2):
-                logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
-                continue
-            if plat_id_orig_str in repas_b_utilises_ids_list:
-                logger.debug(f"Reste {nom_plat_reste} filtré: Déjà utilisé pour un repas B.")
-                continue
-            if not (nom_plat_reste and nom_plat_reste.strip() and "Recette_ID_" not in nom_plat_reste):
-                logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
-                continue
-            
-            if not self.recette_manager.est_transportable(plat_id_orig_str):
-                logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
-                continue
-
-            candidats_restes_ids.append(plat_id_orig_str)
-            logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
-
-
-        if candidats_restes_ids:
-            plat_id_choisi_str = candidats_restes_ids[0]
-            nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
-            repas_b_utilises_ids_list.append(plat_id_choisi_str)
-            logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
-            return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
-
-        logger.info("Pas de reste disponible trouvé pour ce Repas B.")
-        return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
 
 
     def generer_menu(self):
-        resultats_df_list = []
-        repas_b_utilises_ids = []
-        plats_transportables_semaine = {}
-        used_recipes_current_generation_set = set()
+        resultats_menu = []
+        ingredients_menu_cumules = {}
+        used_recipes_in_current_gen = set()
         menu_recent_noms = []
         
-        ingredients_menu_cumules = {}
-        
-        for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
-            date_repas_dt = repas_planning_row["Date"]
-            participants_str = str(repas_planning_row["Participants"])
-            participants_count = self.compter_participants(participants_str)
-            transportable_req = str(repas_planning_row.get("Transportable", "")).strip().lower()
-            temps_req = str(repas_planning_row.get("Temps", "")).strip().lower()
-            nutrition_req = str(repas_planning_row.get("Nutrition", "")).strip().lower()
-
-            logger.info(f"\n--- Traitement Planning: {date_repas_dt.strftime('%d/%m/%Y %H:%M')} - Participants: {participants_str} ---")
-
-            recette_choisie_id = None
-            nom_plat_final = "Erreur - Plat non défini"
-            remarques_repas = ""
-            temps_prep_final = 0
-            
-            if participants_str == "B":
-                nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
-                    date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
-                )
-                if recette_choisie_id:
-                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-            else:
-                recette_choisie_id, _ = self._traiter_menu_standard(
-                    date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                    menu_recent_noms, transportable_req, temps_req, nutrition_req
-                )
-                if recette_choisie_id:
-                    nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
-                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-                    remarques_repas = "Généré automatiquement"
-                else:
-                    nom_plat_final = "Recette non trouvée"
-                    remarques_repas = "Aucune recette appropriée trouvée selon les critères."
-
-            if recette_choisie_id:
-                ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
-                for ing_id, qte_necessaire in ingredients_necessaires_ce_repas.items():
-                    current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
-                    ingredients_menu_cumules[ing_id] = current_qte + qte_necessaire
-                
-                self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
-                used_recipes_current_generation_set.add(recette_choisie_id)
-                
-                if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
-                    plats_transportables_semaine[date_repas_dt] = recette_choisie_id
-                    logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) ajouté à plats_transportables_semaine pour le {date_repas_dt.strftime('%Y-%m-%d')}.")
-                elif participants_str != "B":
-                    logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) non ajouté à plats_transportables_semaine (transportable_req est '{transportable_req}' ou recette non transportable).")
-
-
-            self._log_decision_recette(recette_choisie_id, date_repas_dt, participants_str)
-
-            self._ajouter_resultat(
-                resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
-                remarques_repas, temps_prep_final, recette_choisie_id
+        for _, row in self.df_planning.iterrows():
+            date_repas, nom_repas, participants_str, transportable_req, temps_req, nutrition_req = (
+                row["Date"], row["Repas"], str(row["Participant(s)"]), str(row["Transportable"]),
+                str(row["Temps de préparation"]), str(row["Nutrition"])
             )
             
-            if nom_plat_final and "Pas de recette" not in nom_plat_final and "Pas de reste" not in nom_plat_final and "Erreur" not in nom_plat_final and "Invalide" not in nom_plat_final:
-                menu_recent_noms.append(nom_plat_final)
-                if len(menu_recent_noms) > 3:
-                    menu_recent_noms.pop(0)
+            participants_count_int = self.compter_participants(participants_str)
 
+            recette_choisie_id = None
+            manquants_recette = {}
 
-        df_menu_genere = pd.DataFrame(resultats_df_list)
+            if "Recette" in row and pd.notna(row["Recette"]) and str(row["Recette"]).strip():
+                # Cas où une recette est pré-remplie
+                recette_choisie_id = str(row["Recette"])
+                if self.recette_manager.obtenir_nom(recette_choisie_id) is None:
+                    recette_choisie_id = None
+                    self._ajouter_resultat(resultats_menu, date_repas, nom_repas, participants_str, "ERREUR: Recette pré-remplie inexistante.", 0)
+                else:
+                    self._log_decision_recette(recette_choisie_id, date_repas, participants_str)
+            else:
+                # Logique de génération automatique
+                if "Repas" in row and str(row["Repas"]).lower() == "resto":
+                    self._ajouter_resultat(resultats_menu, date_repas, "Restaurant", participants_str, "Menu restaurant", 0)
+                    continue
+                elif "Repas" in row and str(row["Repas"]).lower() == "pizzas":
+                    self._ajouter_resultat(resultats_menu, date_repas, "Pizzas", participants_str, "Soirée pizzas", 0)
+                    continue
 
-        liste_courses_data = []
-        for ing_id, qte_menu in ingredients_menu_cumules.items():
-            nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
-            qte_stock = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
-            unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
-            qte_acheter = max(0, qte_menu - qte_stock)
+                recette_choisie_id, manquants_recette = self._traiter_menu_standard(
+                    date_repas, participants_str, participants_count_int,
+                    used_recipes_in_current_gen, menu_recent_noms,
+                    transportable_req, temps_req, nutrition_req
+                )
+            
+            if recette_choisie_id:
+                # Ajout de la recette au menu généré
+                nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id)
+                used_recipes_in_current_gen.add(recette_choisie_id)
+                menu_recent_noms.insert(0, nom_recette)
+                menu_recent_noms = menu_recent_noms[:5]
 
-            liste_courses_data.append({
-                "Ingredient": f"{nom_ing} ({unite})",
-                "Quantité du menu": f"{qte_menu:.2f}",
-                "Quantité stock": f"{qte_stock:.2f}",
-                "Quantité à acheter": f"{qte_acheter:.2f}"
-            })
+                # Mise à jour de la liste d'ingrédients cumulés
+                qte_necessaire = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count_int)
+                for ing_id, qte in qte_necessaire.items():
+                    ingredients_menu_cumules[ing_id] = ingredients_menu_cumules.get(ing_id, 0) + qte
 
-        if not df_menu_genere.empty:
-            logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
-            if 'Date' in df_menu_genere.columns:
-                df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
-        
-        liste_courses_data.sort(key=lambda x: x["Ingredient"])
+                # Décrémentation du stock simulé
+                self.recette_manager.decrementer_stock(recette_choisie_id, participants_count_int, date_repas)
+                
+                # Ajout au résultat final
+                temps_total_int = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
+                remarques_recette = (
+                    "Recette pré-remplie" if "Recette" in row and pd.notna(row["Recette"]) else
+                    "Généré automatiquement"
+                )
+                self._ajouter_resultat(resultats_menu, date_repas, nom_repas, participants_str, remarques_recette, temps_total_int, recette_choisie_id)
+            else:
+                remarques_finales = "Pas de recette trouvée (génération impossible avec les critères)."
+                self._ajouter_resultat(resultats_menu, date_repas, nom_repas, participants_str, remarques_finales, 0)
+                
+        return pd.DataFrame(resultats_menu), self.calculer_liste_courses(ingredients_menu_cumules)
 
-        return df_menu_genere, liste_courses_data
+    def calculer_liste_courses(self, ingredients_menu_cumules):
+        liste_courses = []
+        for ing_id, qte_necessaire in ingredients_menu_cumules.items():
+            nom_ingredient = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
+            unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id)
+            
+            # 
+            # --- MODIFICATION CLÉ ---
+            #
+            # Récupération du stock initial (non décrémenté) pour la liste de courses
+            qte_stock_initial = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
+            
+            qte_a_acheter = max(0, qte_necessaire - qte_stock_initial)
+            
+            if qte_a_acheter > 0:
+                liste_courses.append({
+                    "Ingrédient": nom_ingredient,
+                    "Quantité du menu": f"{qte_necessaire:.2f} {unite}",
+                    "Quantité stock": f"{qte_stock_initial:.2f} {unite}", # Utilisation du stock initial
+                    "Quantité à acheter": f"{qte_a_acheter:.2f} {unite}"
+                })
+        return liste_courses
 
-# --- Streamlit UI ---
-
-def load_notion_data():
-    """
-    Charge les données de Notion et les stocke dans la session_state pour éviter de les recharger.
-    """
-    if "notion_dataframes" not in st.session_state:
-        st.session_state.notion_dataframes = {}
-        
-        # J'ai remplacé le spinner unique par des messages de progression détaillés
-        st.sidebar.info("Chargement des données depuis Notion en cours...")
-        
-        with st.spinner("Chargement des Menus..."):
-            st.session_state.notion_dataframes["Menus"] = extract_menus()
-        st.sidebar.success("✅ Menus chargés.")
-
-        with st.spinner("Chargement des Recettes..."):
-            st.session_state.notion_dataframes["Recettes"] = extract_recettes()
-        st.sidebar.success("✅ Recettes chargées.")
-
-        with st.spinner("Chargement des Ingrédients..."):
-            st.session_state.notion_dataframes["Ingredients"] = extract_ingredients()
-        st.sidebar.success("✅ Ingrédients chargés.")
-
-        with st.spinner("Chargement des Ingrédients-Recettes..."):
-            st.session_state.notion_dataframes["Ingredients_recettes"] = extract_ingr_rec()
-        st.sidebar.success("✅ Ingrédients-Recettes chargés.")
-
-        st.sidebar.success("Toutes les données de Notion sont prêtes.")
-
-    return st.session_state.notion_dataframes
 
 def main():
-    st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
-    st.title("🍽️ Générateur de Menus et Liste de Courses")
-    st.markdown("---")
+    st.set_page_config(page_title="Générateur de Menus Automatique", layout="wide")
+    st.title("Générateur de Menus Automatique")
 
-    st.sidebar.header("Chargement des fichiers CSV")
-    st.sidebar.info("Veuillez charger le fichier CSV nécessaire pour le planning.")
-    
-    uploaded_files = {}
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
+    df_planning_data = {
+        "Date": [datetime.now() + timedelta(days=i) for i in range(7)],
+        "Repas": ["Midi", "Soir"] * 4,
+        "Participant(s)": ["P", "A,B"] * 4,
+        "Recette": [None] * 8,
+        "Transportable": ["Non"] * 8,
+        "Temps de préparation": [""] * 8,
+        "Nutrition": [""] * 8
+    }
+    df_planning_default = pd.DataFrame(df_planning_data)
+    df_planning_default["Repas"] = df_planning_default["Repas"].replace(
+        {"Midi": "Midi", "Soir": "Soir"}
+    )
+    df_planning_default["Participant(s)"] = df_planning_default["Participant(s)"].replace(
+        {"A,B": "A,B"}
     )
 
-    if uploaded_files["Planning.csv"] is None:
-        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
-        return
+    if 'planning' not in st.session_state:
+        st.session_state.planning = df_planning_default
 
-    dataframes = {}
+    st.header("1. Planning de la semaine")
+    st.info("Remplissez le planning. Laissez 'Recette' vide pour une génération automatique.")
 
-    try:
-        uploaded_files["Planning.csv"].seek(0)
-        df_planning = pd.read_csv(
-            uploaded_files["Planning.csv"],
-            encoding='utf-8',
-            sep=';',
-            parse_dates=['Date'],
-            dayfirst=True
-        )
-        dataframes["Planning"] = df_planning
-        st.sidebar.success("Planning.csv chargé avec succès.")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
-        return
-
-    # --- NOUVEAU : Chargement de l'historique des menus à partir de Notion via la nouvelle fonction ---
-    st.sidebar.subheader("Données chargées depuis Notion")
-    try:
-        notion_data = load_notion_data()
-        dataframes.update(notion_data)
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
-        return
-
-    # Vérification des colonnes essentielles après le chargement
-    try:
-        verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
-        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
-        verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
-    except ValueError:
-        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs jeux de données (Notion ou Planning.csv). Veuillez vérifier les en-têtes.")
-        return
-
-    # Normalisation des colonnes numériques pour les dataframes Notion
-    if "Temps_total" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Temps_total"] = pd.to_numeric(dataframes["Recettes"]["Temps_total"], errors='coerce').fillna(VALEUR_DEFAUT_TEMPS_PREPARATION).astype(int)
-    if "Calories" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Calories"] = pd.to_numeric(dataframes["Recettes"]["Calories"], errors='coerce')
-    if "Proteines" in dataframes["Recettes"].columns:
-        dataframes["Recettes"]["Proteines"] = pd.to_numeric(dataframes["Recettes"]["Proteines"], errors='coerce')
-
-    st.markdown("---")
-    st.header("1. Générer le Menu")
-    st.write("Cliquez sur le bouton ci-dessous pour générer le menu hebdomadaire et la liste de courses.")
-
-    if st.button("🚀 Générer le Menu"):
-        with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
+    edited_df = st.data_editor(
+        st.session_state.planning,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Date": st.column_config.DatetimeColumn(
+                "Date",
+                format="DD/MM/YYYY",
+                step=1
+            ),
+            "Repas": st.column_config.SelectboxColumn(
+                "Repas",
+                options=["Midi", "Soir", "Pizzas", "Restaurant"],
+                required=True
+            ),
+            "Participant(s)": st.column_config.TextColumn(
+                "Participant(s)",
+                help="Séparer les codes par des virgules (ex: A,B,C)",
+                required=True
+            ),
+            "Recette": st.column_config.TextColumn("Recette (ID Notion)"),
+            "Transportable": st.column_config.SelectboxColumn(
+                "Transportable",
+                options=["Oui", "Non", ""],
+            ),
+            "Temps de préparation": st.column_config.SelectboxColumn(
+                "Temps de préparation",
+                options=["express", "rapide", ""],
+            ),
+            "Nutrition": st.column_config.SelectboxColumn(
+                "Nutrition",
+                options=["équilibré", ""],
+            )
+        }
+    )
+    st.session_state.planning = edited_df
+    
+    if st.button("Générer le menu et la liste de courses"):
+        with st.spinner("Génération en cours..."):
             try:
+                # 1. Extraction des données
+                df_recettes = extract_recettes()
+                verifier_colonnes(df_recettes, HDR_RECETTES, "Recettes")
+
+                df_menus_hist = extract_menus()
+                verifier_colonnes(df_menus_hist, HDR_MENUS, "Historique des menus")
+                
+                df_ingredients = extract_ingredients()
+                verifier_colonnes(df_ingredients, HDR_INGR, "Ingrédients")
+                
+                df_ingr_rec = extract_ingr_rec()
+                verifier_colonnes(df_ingr_rec, HDR_IR, "Ingrédients/Recettes")
+
+                # 2. Instanciation et génération
                 menu_generator = MenuGenerator(
-                    dataframes["Menus"],
-                    dataframes["Recettes"],
-                    dataframes["Planning"],
-                    dataframes["Ingredients"],
-                    dataframes["Ingredients_recettes"]
+                    df_menus_hist, df_recettes, edited_df, df_ingredients, df_ingr_rec
                 )
-                df_menu_genere, liste_courses = menu_generator.generer_menu()
-
-                st.success("🎉 Menu généré avec succès !")
-
-                st.header("2. Menu Généré")
-                st.dataframe(df_menu_genere)
-
-                df_export = df_menu_genere.copy()
+                menu_genere, liste_courses = menu_generator.generer_menu()
                 
-                df_export = df_export.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                
-                if not pd.api.types.is_datetime64_any_dtype(df_export['Date']):
-                    df_export['Date'] = pd.to_datetime(df_export['Date'], errors='coerce')
-                df_export['Date'] = df_export['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                
-                df_export = df_export[['Date', 'Participant(s)', 'Nom']]
+                st.header("2. Menu de la semaine généré")
+                st.dataframe(menu_genere)
+
+                df_export = menu_genere.drop(columns=['Recette_ID'])
+                df_export = df_export.rename(columns={'Repas': 'Type Repas', 'Remarques': 'Remarques sur la génération'})
+                df_export['Nom'] = [
+                    menu_generator.recette_manager.obtenir_nom(rec_id) 
+                    if rec_id else "" 
+                    for rec_id in menu_genere['Recette_ID']
+                ]
+                df_export = df_export[['Date', 'Type Repas', 'Participant(s)', 'Nom']]
                 
                 csv_data = df_export.to_csv(index=False, sep=',', encoding='utf-8-sig')
                 
