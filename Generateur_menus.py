@@ -3,12 +3,9 @@ import pandas as pd
 import random
 import logging
 from datetime import datetime, timedelta
-import time, httpx
-from notion_client import Client
-from notion_client.errors import RequestTimeoutError, APIResponseError
 
-# ────── CONFIGURATION INITIALE ──────────────────────────────────
 # Configuration du logger pour Streamlit
+# Niveau DEBUG pour voir les détails de filtrage
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -26,80 +23,6 @@ TEMPS_MAX_EXPRESS = 20
 TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
-# ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-NOTION_API_KEY           = st.secrets["notion_api_key"]
-ID_MENUS                 = st.secrets["notion_database_id_menus"]
-ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
-BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
-
-notion = Client(auth=NOTION_API_KEY)
-
-# ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
-def paginate(db_id, **kwargs):
-    out, cur, retry = [], None, 0
-    while True:
-        try:
-            resp = notion.databases.query(database_id=db_id,
-                                          start_cursor=cur,
-                                          page_size=BATCH_SIZE,
-                                          **kwargs)
-            out.extend(resp["results"])
-            if not resp["has_more"]:
-                break
-            cur = resp["next_cursor"]
-            time.sleep(0.3)
-            retry = 0
-        except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout):
-            retry += 1
-            if retry > MAX_RETRY:
-                st.error("Timeout répété – arrêt.")
-                break
-            time.sleep(WAIT_S * retry)
-        except APIResponseError as e:
-            st.error(f"Erreur API : {e}")
-            break
-    return out
-
-HDR_MENUS = ["Nom Menu","Recette","Date"]
-def extract_menus():
-    rows=[]
-    for p in paginate(ID_MENUS,
-            filter={"property":"Recette","relation":{"is_not_empty":True}}):
-        pr = p["properties"]
-        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
-        rec_ids=[]
-        rel=pr["Recette"]
-        if rel["type"]=="relation":
-            rec_ids=[r["id"] for r in rel["relation"]]
-        else:
-            for it in rel["rollup"]["array"]:
-                rec_ids.extend([it.get("id")] if it.get("id") else
-                               [r["id"] for r in it.get("relation",[])])
-        d=""
-        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
-            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
-        rows.append([nom.strip(), ", ".join(rec_ids), d])
-    return pd.DataFrame(rows,columns=HDR_MENUS)
-
-# NOUVEAU : Fonction pour extraire les données des ingrédients depuis Notion
-HDR_INGREDIENTS = [COLONNE_ID_INGREDIENT, "Nom", "unité", "Qte reste"]
-def extract_ingredients():
-    rows = []
-    for p in paginate(ID_INGREDIENTS):
-        pr = p["properties"]
-        page_id = p["id"]
-        nom = "".join(t["plain_text"] for t in pr["Nom"]["title"])
-        unite = pr["unité"]["select"]["name"] if pr["unité"]["select"] else ""
-        
-        # Correction pour gérer les valeurs vides de la colonne "Qte reste"
-        qte_reste = pr["Qte reste"]["number"] if pr["Qte reste"] and "number" in pr["Qte reste"] and pr["Qte reste"]["number"] is not None else 0
-        
-        rows.append([page_id, nom.strip(), unite.strip(), qte_reste])
-    return pd.DataFrame(rows, columns=HDR_INGREDIENTS)
-
-# ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
-
-
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
     colonnes_manquantes = [col for col in colonnes_attendues if col not in df.columns]
@@ -115,10 +38,8 @@ class RecetteManager:
             self.df_recettes = self.df_recettes.set_index(COLONNE_ID_RECETTE, drop=False)
 
         self.df_ingredients_initial = df_ingredients.copy()
-        if COLONNE_ID_INGREDIENT in self.df_ingredients_initial.columns:
-            self.df_ingredients_initial = self.df_ingredients_initial.set_index(COLONNE_ID_INGREDIENT, drop=False)
-
         self.df_ingredients_recettes = df_ingredients_recettes.copy()
+
         self.stock_simule = self.df_ingredients_initial.copy()
         if "Qte reste" in self.stock_simule.columns:
             self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
@@ -275,10 +196,8 @@ class RecetteManager:
     def obtenir_nom_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            if self.df_ingredients_initial.index.name == COLONNE_ID_INGREDIENT:
-                 return self.df_ingredients_initial.loc[ing_page_id_str, 'Nom']
-            else:
-                return self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
+            nom = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
+            return nom
         except (IndexError, KeyError):
             logger.warning(f"Nom introuvable pour ingrédient ID: {ing_page_id_str} dans df_ingredients_initial.")
             return f"ID_Ing_{ing_page_id_str}"
@@ -423,12 +342,10 @@ class MenuGenerator:
             logger.debug("Historique des menus vide.")
             return None
         
-        # Le bug était ici. Il faut un `timedelta` pour remonter le temps.
         deux_jours_avant = date_repas - timedelta(days=2)
         
         recettes_candidates_ids = set()
         
-        # Filtre sur l'historique des menus pour les dates et les recettes non vides
         recent_menus = df_hist[
             (df_hist['Date'] >= deux_jours_avant) &
             (df_hist['Date'] < date_repas) &
@@ -444,7 +361,6 @@ class MenuGenerator:
             if self.recette_manager.est_transportable(recette_id_str):
                 recettes_candidates_ids.add(recette_id_str)
         
-        # Filtre les recettes déjà utilisées dans la génération de menu actuelle
         recettes_candidates_ids = list(recettes_candidates_ids - used_recipes_in_current_gen)
 
         if not recettes_candidates_ids:
@@ -508,7 +424,7 @@ class MenuGenerator:
         planning_genere = []
         used_recipes = set()
         
-        df_menus_hist = st.session_state.get('df_menus_hist', pd.DataFrame(columns=HDR_MENUS))
+        df_menus_hist = st.session_state.get('df_menus_hist', pd.DataFrame(columns=["Nom Menu","Recette","Date"]))
         df_ingredients = st.session_state.get('df_ingredients')
 
         recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
@@ -524,7 +440,6 @@ class MenuGenerator:
             recettes_scores_dispo = {}
             recettes_ingredients_manquants = {}
 
-            # Logique spécifique pour les "Restes"
             if participants.strip().upper() == "B":
                 recette_choisie_id = self.trouver_restes_transportables(date_repas, used_recipes)
                 if recette_choisie_id:
@@ -564,6 +479,7 @@ class MenuGenerator:
 
         return pd.DataFrame(planning_genere)
 
+
 # ────── LOGIQUE PRINCIPALE DE L'APPLICATION STREAMLIT ───────────
 st.set_page_config(layout="wide")
 st.title("Générateur de Menus Automatisé")
@@ -586,9 +502,79 @@ with st.sidebar:
     uploaded_file_recettes = st.file_uploader("2. Charger les recettes (Recettes.csv)", type="csv")
     uploaded_file_ingr_recettes = st.file_uploader("3. Charger les ingrédients des recettes (Ingredients_recettes.csv)", type="csv")
 
-    if st.button("4. Charger les données Notion & CSV"):
+    if st.button("Charger dans Notion"):
         with st.spinner("Chargement en cours..."):
             try:
+                # Ajout des dépendances manquantes pour le code d'origine
+                from notion_client import Client
+                from notion_client.errors import RequestTimeoutError, APIResponseError
+                import time, httpx
+                
+                NOTION_API_KEY           = st.secrets["notion_api_key"]
+                ID_MENUS                 = st.secrets["notion_database_id_menus"]
+                ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
+                BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
+
+                notion = Client(auth=NOTION_API_KEY)
+
+                def paginate(db_id, **kwargs):
+                    out, cur, retry = [], None, 0
+                    while True:
+                        try:
+                            resp = notion.databases.query(database_id=db_id,
+                                                        start_cursor=cur,
+                                                        page_size=BATCH_SIZE,
+                                                        **kwargs)
+                            out.extend(resp["results"])
+                            if not resp["has_more"]:
+                                break
+                            cur = resp["next_cursor"]
+                            time.sleep(0.3)
+                            retry = 0
+                        except (RequestTimeoutError, httpx.TimeoutException, httpx.ReadTimeout):
+                            retry += 1
+                            if retry > MAX_RETRY:
+                                st.error("Timeout répété – arrêt.")
+                                break
+                            time.sleep(WAIT_S * retry)
+                        except APIResponseError as e:
+                            st.error(f"Erreur API : {e}")
+                            break
+                    return out
+
+                HDR_MENUS = ["Nom Menu","Recette","Date"]
+                def extract_menus():
+                    rows=[]
+                    for p in paginate(ID_MENUS,
+                            filter={"property":"Recette","relation":{"is_not_empty":True}}):
+                        pr = p["properties"]
+                        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
+                        rec_ids=[]
+                        rel=pr["Recette"]
+                        if rel["type"]=="relation":
+                            rec_ids=[r["id"] for r in rel["relation"]]
+                        else:
+                            for it in rel["rollup"]["array"]:
+                                rec_ids.extend([it.get("id")] if it.get("id") else
+                                            [r["id"] for r in it.get("relation",[])])
+                        d=""
+                        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
+                            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
+                        rows.append([nom.strip(), ", ".join(rec_ids), d])
+                    return pd.DataFrame(rows,columns=HDR_MENUS)
+
+                HDR_INGREDIENTS = [COLONNE_ID_INGREDIENT, "Nom", "unité", "Qte reste"]
+                def extract_ingredients():
+                    rows = []
+                    for p in paginate(ID_INGREDIENTS):
+                        pr = p["properties"]
+                        page_id = p["id"]
+                        nom = "".join(t["plain_text"] for t in pr["Nom"]["title"])
+                        unite = pr["unité"]["select"]["name"] if pr["unité"]["select"] else ""
+                        qte_reste = pr["Qte reste"]["number"] if pr["Qte reste"] and "number" in pr["Qte reste"] and pr["Qte reste"]["number"] is not None else 0
+                        rows.append([page_id, nom.strip(), unite.strip(), qte_reste])
+                    return pd.DataFrame(rows, columns=HDR_INGREDIENTS)
+
                 st.session_state['df_ingredients'] = extract_ingredients()
                 if uploaded_file_planning:
                     st.session_state['df_planning'] = pd.read_csv(uploaded_file_planning, sep=';')
@@ -597,7 +583,6 @@ with st.sidebar:
                 if uploaded_file_ingr_recettes:
                     st.session_state['df_ingredients_recipes'] = pd.read_csv(uploaded_file_ingr_recettes)
                 
-                # Chargement de l'historique des menus depuis Notion
                 st.session_state['df_menus_hist'] = extract_menus()
                 
                 if (st.session_state['df_ingredients'] is not None and not st.session_state['df_ingredients'].empty and
@@ -613,14 +598,9 @@ with st.sidebar:
                 st.error(f"Une erreur est survenue lors du chargement : {e}")
                 st.session_state['data_loaded'] = False
 
-    if st.button("5. Réinitialiser les données"):
-        st.session_state.clear()
-        st.success("Toutes les variables de session ont été réinitialisées.")
-
-
 st.header("Menu Généré")
 if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
-    if st.button("6. Générer le menu"):
+    if st.button("Générer le menu"):
         with st.spinner("Génération du menu en cours..."):
             try:
                 generator = MenuGenerator(
