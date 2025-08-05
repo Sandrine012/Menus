@@ -8,7 +8,6 @@ from ipywidgets import Button, VBox, Output
 # ─── Clés d'authentification Notion ─────────────────────────────
 # IMPORTANT : Remplacez ces valeurs par vos propres clés et identifiants
 notion_api_key="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"
- 
 # ─── IDs des bases de données Notion ────────────────────────────
 ID_INGREDIENTS = "b23b048b67334032ac1ae4e82d308817"
 ID_INGREDIENTS_RECETTES = "1d16fa46f8b2805b8377eba7bf668eb5"
