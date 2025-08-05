@@ -27,15 +27,14 @@ TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-# Ces lignes sont ajoutées depuis Generateur.py
 NOTION_API_KEY           = st.secrets["notion_api_key"]
 ID_MENUS                 = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 
 notion = Client(auth=NOTION_API_KEY)
 
 # ────── AJOUT DES FONCTIONS D'EXTRACTION NOTION ─────────────────
-# Ces fonctions sont copiées depuis Generateur.py
 def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
@@ -81,6 +80,21 @@ def extract_menus():
             d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
+
+# NOUVEAU : Fonction pour extraire les données des ingrédients depuis Notion
+HDR_INGREDIENTS = [COLONNE_ID_INGREDIENT, "Nom", "unité", "Qte reste"]
+def extract_ingredients():
+    rows = []
+    for p in paginate(ID_INGREDIENTS):
+        pr = p["properties"]
+        page_id = p["id"]
+        nom = "".join(t["plain_text"] for t in pr["Nom"]["title"])
+        unite = pr["unité"]["select"]["name"] if pr["unité"]["select"] else ""
+        qte_reste = pr["Qte reste"]["number"] if pr["Qte reste"]["number"] else 0
+        
+        rows.append([page_id, nom.strip(), unite.strip(), qte_reste])
+    return pd.DataFrame(rows, columns=HDR_INGREDIENTS)
+
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
 
 
@@ -99,8 +113,10 @@ class RecetteManager:
             self.df_recettes = self.df_recettes.set_index(COLONNE_ID_RECETTE, drop=False)
 
         self.df_ingredients_initial = df_ingredients.copy()
-        self.df_ingredients_recettes = df_ingredients_recettes.copy()
+        if COLONNE_ID_INGREDIENT in self.df_ingredients_initial.columns:
+            self.df_ingredients_initial = self.df_ingredients_initial.set_index(COLONNE_ID_INGREDIENT, drop=False)
 
+        self.df_ingredients_recettes = df_ingredients_recettes.copy()
         self.stock_simule = self.df_ingredients_initial.copy()
         if "Qte reste" in self.stock_simule.columns:
             self.stock_simule["Qte reste"] = pd.to_numeric(self.stock_simule["Qte reste"], errors='coerce').fillna(0).astype(float)
@@ -257,8 +273,10 @@ class RecetteManager:
     def obtenir_nom_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
-            nom = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
-            return nom
+            if self.df_ingredients_initial.index.name == COLONNE_ID_INGREDIENT:
+                 return self.df_ingredients_initial.loc[ing_page_id_str, 'Nom']
+            else:
+                return self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Nom'].iloc[0]
         except (IndexError, KeyError):
             logger.warning(f"Nom introuvable pour ingrédient ID: {ing_page_id_str} dans df_ingredients_initial.")
             return f"ID_Ing_{ing_page_id_str}"
@@ -435,11 +453,9 @@ class MenuGenerator:
                 continue
             
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
-                # Le log spécifique est déjà dans est_adaptee_aux_participants
                 continue
             
             if self.est_recente(recette_id_str_cand, date_repas):
-                # Le log spécifique est déjà dans est_recente
                 continue
 
             if nutrition_req == "equilibré":
@@ -585,9 +601,6 @@ class MenuGenerator:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            # Correction sécurité : s'assurer que date_plat_orig est bien un datetime
-            if isinstance(date_plat_orig, str):
-                date_plat_orig = pd.to_datetime(date_plat_orig, dayfirst=True)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
@@ -596,7 +609,7 @@ class MenuGenerator:
             
             logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
 
-            if not (0 < jours_ecoules <= 2): # Condition: planifié dans les 2 jours précédents
+            if not (0 < jours_ecoules <= 2):
                 logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
                 continue
             if plat_id_orig_str in repas_b_utilises_ids_list:
@@ -606,30 +619,16 @@ class MenuGenerator:
                 logger.debug(f"Reste {nom_plat_reste} filtré: Nom de plat invalide ou générique.")
                 continue
             
-            # Vérification explicite que la recette d'origine est marquée comme transportable
-            if not self.recette_manager.est_transportable(plat_id_orig_str): # Condition: transportable est 'oui'
+            if not self.recette_manager.est_transportable(plat_id_orig_str):
                 logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
                 continue
 
-            # ANCIENNE LOGIQUE D'ANTI-RÉPÉTITION, RETIRÉE POUR LES RESTES :
-            # premier_mot_reste = nom_plat_reste.lower().split()[0]
-            # mots_cles_recents_set = set()
-            # if menu_recent_noms_list:
-            #      for nom_plat_r in menu_recent_noms_list:
-            #         if isinstance(nom_plat_r, str) and nom_plat_r.strip():
-            #             try: mots_cles_recents_set.add(nom_plat_r.lower().split()[0])
-            #             except IndexError: pass
-            # if premier_mot_reste not in mots_cles_recents_set:
-            #     candidats_restes_ids.append(plat_id_orig_str)
-            #     logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
-            
-            # Nouvelle logique : Tous les restes valides sont ajoutés si les conditions précédentes sont respectées.
             candidats_restes_ids.append(plat_id_orig_str)
             logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes (pas de filtrage anti-répétition pour les restes).")
 
 
         if candidats_restes_ids:
-            plat_id_choisi_str = candidats_restes_ids[0] # Choisit le reste transportable le plus ancien et valide
+            plat_id_choisi_str = candidats_restes_ids[0]
             nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
             repas_b_utilises_ids_list.append(plat_id_choisi_str)
             logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
@@ -642,10 +641,10 @@ class MenuGenerator:
     def generer_menu(self):
         resultats_df_list = []
         repas_b_utilises_ids = []
-        plats_transportables_semaine = {} # Réinitialisé à chaque génération
-        used_recipes_current_generation_set = set() # Pour éviter les doublons dans la même génération
-        menu_recent_noms = [] # Pour la logique d'anti-répétition des premiers mots
-        ingredients_effectivement_utilises_ids_set = set() # Non utilisé pour la liste de courses finale, mais pour le suivi
+        plats_transportables_semaine = {}
+        used_recipes_current_generation_set = set()
+        menu_recent_noms = []
+        ingredients_effectivement_utilises_ids_set = set()
         self.ingredients_a_acheter_cumules = {}
 
         for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
@@ -666,19 +665,13 @@ class MenuGenerator:
             ingredients_manquants_pour_recette_choisie = {}
 
             if participants_str == "B":
-                # Only consider meals that were *explicitly marked* as transportable in the planning
-                # and subsequently chosen for a standard meal.
                 nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
                     date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
                 )
                 if recette_choisie_id:
                     ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, 1, date_repas_dt)
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-                    # REMOVED: This logic was incorrect. A Repas B is already a leftover and shouldn't be added back
-                    # to the pool of 'original transportable meals'.
-                    # if date_repas_dt.weekday() >= 5:
-                    #      plats_transportables_semaine[date_repas_dt] = recette_choisie_id
-            else: # Repas standard
+            else:
                 recette_choisie_id, ingredients_manquants_pour_recette_choisie = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                     menu_recent_noms, transportable_req, temps_req, nutrition_req
@@ -695,14 +688,11 @@ class MenuGenerator:
                 ingredients_consommes_ce_repas = self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
                 used_recipes_current_generation_set.add(recette_choisie_id)
                 
-                # Only add to plats_transportables_semaine if the *planning itself* requested a transportable meal
-                # AND the chosen recipe is indeed transportable.
-                # This applies only to standard meals, not Repas B.
                 if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
                     plats_transportables_semaine[date_repas_dt] = recette_choisie_id
 
                     logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) ajouté à plats_transportables_semaine pour le {date_repas_dt.strftime('%Y-%m-%d')}.")
-                elif participants_str != "B": # Log why it's not added if not a Repas B
+                elif participants_str != "B":
                     logger.debug(f"'{nom_plat_final}' ({recette_choisie_id}) non ajouté à plats_transportables_semaine (transportable_req est '{transportable_req}' ou recette non transportable).")
 
 
@@ -717,10 +707,9 @@ class MenuGenerator:
                 resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
                 remarques_repas, temps_prep_final, recette_choisie_id
             )
-            # Gestion de menu_recent_noms pour l'anti-répétition des premiers mots
             if nom_plat_final and "Pas de recette" not in nom_plat_final and "Pas de reste" not in nom_plat_final and "Erreur" not in nom_plat_final and "Invalide" not in nom_plat_final:
                 menu_recent_noms.append(nom_plat_final)
-                if len(menu_recent_noms) > 3: # Garder les 3 derniers noms de plats pour la logique anti-répétition
+                if len(menu_recent_noms) > 3:
                     menu_recent_noms.pop(0)
 
 
@@ -730,7 +719,6 @@ class MenuGenerator:
         for ing_id, qte_cumulee in self.ingredients_a_acheter_cumules.items():
             nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
             if nom_ing and "ID_Ing_" not in nom_ing:
-                # Essayer de récupérer l'unité de l'ingrédient
                 unite_ing = "unité(s)"
                 try:
                     unite_ing_df = self.recette_manager.df_ingredients_initial[
@@ -751,11 +739,10 @@ class MenuGenerator:
             if 'Date' in df_menu_genere.columns:
                 df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
 
-        # Convertir la liste de courses en un format plus simple pour le retour
         formatted_liste_courses = []
         for ing, qte_unite in liste_courses_final.items():
             formatted_liste_courses.append(f"{ing}: {qte_unite}")
-        formatted_liste_courses.sort() # Tri alphabétique
+        formatted_liste_courses.sort()
 
         return df_menu_genere, formatted_liste_courses
 
@@ -772,7 +759,6 @@ def main():
 
     uploaded_files = {}
     
-    # Grouper les fichiers "Recettes" et "Ingredients_recettes"
     st.sidebar.subheader("Fichiers de Recettes")
     uploaded_files["Recettes.csv"] = st.sidebar.file_uploader(
         "Uploader Recettes.csv (informations sur les recettes)", 
@@ -791,25 +777,13 @@ def main():
         type="csv", 
         key="Planning.csv"
     )
-    # L'uploader pour Menus.csv est commenté pour ne plus le charger
-    # uploaded_files["Menus.csv"] = st.sidebar.file_uploader(
-    #     "Uploader Menus.csv (historique de vos menus)", 
-    #     type="csv", 
-    #     key="Menus.csv"
-    # )
-    uploaded_files["Ingredients.csv"] = st.sidebar.file_uploader(
-        "Uploader Ingredients.csv (liste de vos ingrédients et stock)", 
-        type="csv", 
-        key="Ingredients.csv"
-    )
 
     dataframes = {}
-    # On vérifie que les 4 fichiers nécessaires (hors Menus.csv) sont présents
-    required_files = ["Recettes.csv", "Ingredients_recettes.csv", "Planning.csv", "Ingredients.csv"]
+    required_files = ["Recettes.csv", "Ingredients_recettes.csv", "Planning.csv"]
     all_files_uploaded = all(uploaded_files.get(f) is not None for f in required_files)
     
     if not all_files_uploaded:
-        st.warning("Veuillez charger tous les fichiers CSV nécessaires (Recettes, Ingredients_recettes, Planning, Ingredients) pour continuer.")
+        st.warning("Veuillez charger tous les fichiers CSV nécessaires (Recettes, Ingredients_recettes, Planning) pour continuer.")
         return
 
     # Chargement des fichiers uploadés
@@ -839,10 +813,10 @@ def main():
                 st.sidebar.success(f"{file_name} chargé avec succès.")
             except Exception as e:
                 st.sidebar.error(f"Erreur lors du chargement de {file_name}: {e}")
-                return # Arrêter l'exécution si un fichier a une erreur de chargement
+                return
 
-    # Chargement des menus à partir de Notion via la nouvelle fonction
-    with st.spinner("Chargement de l'historique des menus depuis Notion..."):
+    # Chargement des données depuis Notion
+    with st.spinner("Chargement de l'historique des menus et des ingrédients depuis Notion..."):
         try:
             df_menus_from_notion = extract_menus()
             dataframes["Menus"] = df_menus_from_notion
@@ -853,17 +827,28 @@ def main():
             st.sidebar.error(f"Erreur lors de la récupération de l'historique des menus depuis Notion : {e}")
             return
 
+        # NOUVEAU : Chargement des ingrédients depuis Notion
+        try:
+            df_ingredients_from_notion = extract_ingredients()
+            dataframes["Ingredients"] = df_ingredients_from_notion
+            st.sidebar.success("Liste des ingrédients chargée depuis Notion avec succès.")
+            if df_ingredients_from_notion.empty:
+                st.sidebar.warning("Aucun ingrédient trouvé sur Notion.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors de la récupération des ingrédients depuis Notion : {e}")
+            return
 
     # Vérification des colonnes essentielles après le chargement
     try:
         verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes.csv")
         verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
         verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus.csv")
-        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients.csv")
+        # NOUVEAU: La vérification de 'Ingredients' est maintenant pour la donnée Notion
+        verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients (depuis Notion)")
         verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes.csv")
 
     except ValueError:
-        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV.")
+        st.error("Des colonnes essentielles sont manquantes dans un ou plusieurs fichiers. Veuillez vérifier les en-têtes de vos fichiers CSV ou de vos bases de données Notion.")
         return
 
     st.markdown("---")
@@ -873,7 +858,6 @@ def main():
     if st.button("🚀 Générer le Menu"):
         with st.spinner("Génération du menu en cours... Cela peut prendre quelques instants."):
             try:
-                # Initialisation de MenuGenerator avec les DataFrames chargés
                 menu_generator = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
