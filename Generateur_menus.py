@@ -468,17 +468,12 @@ class MenuGenerator:
         planning_genere = []
         used_recipes = set()
         
-        # Initialisation des gestionnaires avec les DataFrames des fichiers
         df_menus_hist = st.session_state.get('df_menus_hist', pd.DataFrame(columns=HDR_MENUS))
         df_ingredients = st.session_state.get('df_ingredients')
 
         recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         menus_history_manager = MenusHistoryManager(df_menus_hist)
         
-        # On passe la session_state et les autres DF comme arguments aux méthodes si nécessaire
-        # ... (le code continue comme avant, sans changement supplémentaire)
-        # 
-        # Note : Le reste du code ci-dessous ne contient pas la correction, mais je le laisse pour des raisons de contexte
         for index, row in self.df_planning.iterrows():
             date_repas = row["Date"]
             participants = row.get("Participants", "")
@@ -493,7 +488,6 @@ class MenuGenerator:
                 row.get("Nutrition", "")
             )
             
-            # Application de la logique de sélection (inchangée)
             if anti_gaspi_candidates:
                 recette_choisie_id = random.choice(anti_gaspi_candidates)
             elif recettes_candidates:
@@ -571,45 +565,42 @@ with st.sidebar:
         st.session_state.clear()
         st.success("Toutes les variables de session ont été réinitialisées.")
 
-col1, col2 = st.columns(2)
+# Affichage du planning et du menu généré
+st.header("Planning de la semaine")
+if 'df_planning' in st.session_state and st.session_state['df_planning'] is not None:
+    st.dataframe(st.session_state['df_planning'], use_container_width=True)
+else:
+    st.info("Chargez un fichier de planning pour l'afficher ici.")
 
-with col1:
-    st.header("Planning de la semaine")
-    if 'df_planning' in st.session_state and st.session_state['df_planning'] is not None:
-        st.dataframe(st.session_state['df_planning'], use_container_width=True)
-    else:
-        st.info("Chargez un fichier de planning pour l'afficher ici.")
+st.header("Menu Généré")
+if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
+    if st.button("6. Générer le menu"):
+        with st.spinner("Génération du menu en cours..."):
+            try:
+                generator = MenuGenerator(
+                    st.session_state['df_menus_hist'],
+                    st.session_state['df_recipes'],
+                    st.session_state['df_planning'],
+                    st.session_state['df_ingredients'],
+                    st.session_state['df_ingredients_recipes']
+                )
+                menu_genere = generator.generer_menu_planifie(st.session_state['df_recipes'], st.session_state['df_ingredients_recipes'])
+                st.session_state['menu_genere'] = menu_genere
+                st.success("Menu généré avec succès!")
+            except ValueError as ve:
+                st.error(f"Erreur de génération du menu : {ve}")
+            except Exception as e:
+                st.error(f"Une erreur inattendue est survenue lors de la génération du menu : {e}")
 
-with col2:
-    st.header("Menu Généré")
-    if 'data_loaded' in st.session_state and st.session_state['data_loaded']:
-        if st.button("6. Générer le menu"):
-            with st.spinner("Génération du menu en cours..."):
-                try:
-                    generator = MenuGenerator(
-                        st.session_state['df_menus_hist'],
-                        st.session_state['df_recipes'],
-                        st.session_state['df_planning'],
-                        st.session_state['df_ingredients'],
-                        st.session_state['df_ingredients_recipes']
-                    )
-                    menu_genere = generator.generer_menu_planifie(st.session_state['df_recipes'], st.session_state['df_ingredients_recipes'])
-                    st.session_state['menu_genere'] = menu_genere
-                    st.success("Menu généré avec succès!")
-                except ValueError as ve:
-                    st.error(f"Erreur de génération du menu : {ve}")
-                except Exception as e:
-                    st.error(f"Une erreur inattendue est survenue lors de la génération du menu : {e}")
-
-    if 'menu_genere' in st.session_state and not st.session_state['menu_genere'].empty:
-        st.dataframe(st.session_state['menu_genere'], use_container_width=True)
-        
-        csv_file = st.session_state['menu_genere'].to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Télécharger le menu généré",
-            data=csv_file,
-            file_name='menu_genere.csv',
-            mime='text/csv'
-        )
-    else:
-        st.info("Le menu généré s'affichera ici.")
+if 'menu_genere' in st.session_state and not st.session_state['menu_genere'].empty:
+    st.dataframe(st.session_state['menu_genere'], use_container_width=True)
+    
+    csv_file = st.session_state['menu_genere'].to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Télécharger le menu généré",
+        data=csv_file,
+        file_name='menu_genere.csv',
+        mime='text/csv'
+    )
+else:
+    st.info("Le menu généré s'affichera ici.")
