@@ -1070,6 +1070,18 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
+    # Initialisation des variables de session si elles n'existent pas
+    if 'generation_reussie' not in st.session_state:
+        st.session_state['generation_reussie'] = False
+    if 'df_menu_realiste' not in st.session_state:
+        st.session_state['df_menu_realiste'] = pd.DataFrame()
+    if 'df_menu_alternatif' not in st.session_state:
+        st.session_state['df_menu_alternatif'] = pd.DataFrame()
+    if 'liste_courses_realiste' not in st.session_state:
+        st.session_state['liste_courses_realiste'] = []
+    if 'liste_courses_alternatif' not in st.session_state:
+        st.session_state['liste_courses_alternatif'] = []
+
     st.markdown("---")
     st.header("1. Générer et Exporter en 1 clic")
     st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion. Il génère aussi un menu alternatif.")
@@ -1217,43 +1229,58 @@ def main():
         with tab_realiste:
             st.header("Menu Réaliste (avec décrémentation du stock)")
             st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
-            st.dataframe(st.session_state['df_menu_realiste'])
+            if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
+                st.dataframe(st.session_state['df_menu_realiste'])
+            else:
+                st.info("Aucun menu réaliste n'a été généré.")
 
             col1, col2 = st.columns(2)
             with col1:
                 # Bouton pour envoyer à Notion
                 if st.button("📤 Envoyer le menu RÉALISTE à Notion", key="send_realiste"):
-                    with st.spinner("Envoi du menu réaliste en cours..."):
-                        success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
-                        if success > 0:
-                            st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-                        if failure > 0:
-                            st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-                        if success == 0 and failure == 0:
-                            st.info("Aucun repas valide à ajouter.")
+                    if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
+                        with st.spinner("Envoi du menu réaliste en cours..."):
+                            success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
+                            if success > 0:
+                                st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
+                            if failure > 0:
+                                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
+                            if success == 0 and failure == 0:
+                                st.info("Aucun repas valide à ajouter.")
+                    else:
+                        st.warning("Veuillez d'abord générer un menu réaliste.")
 
             with col2:
-                df_export_realiste = st.session_state['df_menu_realiste'].copy()
-                df_export_realiste = df_export_realiste.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
-                    df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
-                df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
-                csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                
-                st.download_button(
-                    label="📥 Télécharger le menu RÉALISTE en CSV",
-                    data=csv_data_realiste,
-                    file_name="menu_realiste.csv",
-                    mime="text/csv"
-                )
+                if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
+                    df_export_realiste = st.session_state['df_menu_realiste'].copy()
+                    df_export_realiste = df_export_realiste.rename(columns={
+                        'Participant(s)': 'Participant(s)',
+                        COLONNE_NOM: 'Nom',
+                        'Date': 'Date'
+                    })
+                    if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
+                        df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
+                    df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                    df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
+                    csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                    
+                    st.download_button(
+                        label="📥 Télécharger le menu RÉALISTE en CSV",
+                        data=csv_data_realiste,
+                        file_name="menu_realiste.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.download_button(
+                        label="📥 Télécharger le menu RÉALISTE en CSV",
+                        data=";;",
+                        file_name="menu_realiste.csv",
+                        mime="text/csv",
+                        disabled=True
+                    )
             
             st.subheader("Liste de Courses Détaillée pour le Menu Réaliste")
-            if st.session_state['liste_courses_realiste']:
+            if 'liste_courses_realiste' in st.session_state and st.session_state['liste_courses_realiste']:
                 liste_courses_df_realiste = pd.DataFrame(st.session_state['liste_courses_realiste'])
                 st.dataframe(liste_courses_df_realiste)
                 csv_realiste = liste_courses_df_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
@@ -1270,43 +1297,58 @@ def main():
         with tab_alternatif:
             st.header("Menu Alternatif")
             st.write("Ce menu propose des recettes alternatives qui n'ont pas été sélectionnées pour le menu réaliste, en privilégiant celles moins souvent cuisinées dans le passé.")
-            st.dataframe(st.session_state['df_menu_alternatif'])
+            if 'df_menu_alternatif' in st.session_state and not st.session_state['df_menu_alternatif'].empty:
+                st.dataframe(st.session_state['df_menu_alternatif'])
+            else:
+                st.info("Aucun menu alternatif n'a été généré.")
             
             col1, col2 = st.columns(2)
             with col1:
                 # Bouton pour envoyer à Notion
                 if st.button("📤 Envoyer le menu ALTERNATIF à Notion", key="send_alternatif"):
-                    with st.spinner("Envoi du menu alternatif en cours..."):
-                        success, failure = add_menu_to_notion(st.session_state['df_menu_alternatif'], ID_MENUS)
-                        if success > 0:
-                            st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-                        if failure > 0:
-                            st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-                        if success == 0 and failure == 0:
-                            st.info("Aucun repas valide à ajouter.")
+                    if 'df_menu_alternatif' in st.session_state and not st.session_state['df_menu_alternatif'].empty:
+                        with st.spinner("Envoi du menu alternatif en cours..."):
+                            success, failure = add_menu_to_notion(st.session_state['df_menu_alternatif'], ID_MENUS)
+                            if success > 0:
+                                st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
+                            if failure > 0:
+                                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
+                            if success == 0 and failure == 0:
+                                st.info("Aucun repas valide à ajouter.")
+                    else:
+                        st.warning("Veuillez d'abord générer un menu alternatif.")
 
             with col2:
-                df_export_alternatif = st.session_state['df_menu_alternatif'].copy()
-                df_export_alternatif = df_export_alternatif.rename(columns={
-                    'Participant(s)': 'Participant(s)',
-                    COLONNE_NOM: 'Nom',
-                    'Date': 'Date'
-                })
-                if not pd.api.types.is_datetime64_any_dtype(df_export_alternatif['Date']):
-                    df_export_alternatif['Date'] = pd.to_datetime(df_export_alternatif['Date'], errors='coerce')
-                df_export_alternatif['Date'] = df_export_alternatif['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                df_export_alternatif = df_export_alternatif[['Date', 'Participant(s)', 'Nom']]
-                csv_data_alternatif = df_export_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                
-                st.download_button(
-                    label="📥 Télécharger le menu ALTERNATIF en CSV",
-                    data=csv_data_alternatif,
-                    file_name="menu_alternatif.csv",
-                    mime="text/csv"
-                )
+                if 'df_menu_alternatif' in st.session_state and not st.session_state['df_menu_alternatif'].empty:
+                    df_export_alternatif = st.session_state['df_menu_alternatif'].copy()
+                    df_export_alternatif = df_export_alternatif.rename(columns={
+                        'Participant(s)': 'Participant(s)',
+                        COLONNE_NOM: 'Nom',
+                        'Date': 'Date'
+                    })
+                    if not pd.api.types.is_datetime64_any_dtype(df_export_alternatif['Date']):
+                        df_export_alternatif['Date'] = pd.to_datetime(df_export_alternatif['Date'], errors='coerce')
+                    df_export_alternatif['Date'] = df_export_alternatif['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                    df_export_alternatif = df_export_alternatif[['Date', 'Participant(s)', 'Nom']]
+                    csv_data_alternatif = df_export_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                    
+                    st.download_button(
+                        label="📥 Télécharger le menu ALTERNATIF en CSV",
+                        data=csv_data_alternatif,
+                        file_name="menu_alternatif.csv",
+                        mime="text/csv"
+                    )
+                else:
+                     st.download_button(
+                        label="📥 Télécharger le menu ALTERNATIF en CSV",
+                        data=";;",
+                        file_name="menu_alternatif.csv",
+                        mime="text/csv",
+                        disabled=True
+                    )
             
             st.subheader("Liste de Courses Détaillée pour le Menu Alternatif")
-            if st.session_state['liste_courses_alternatif']:
+            if 'liste_courses_alternatif' in st.session_state and st.session_state['liste_courses_alternatif']:
                 liste_courses_df_alternatif = pd.DataFrame(st.session_state['liste_courses_alternatif'])
                 st.dataframe(liste_courses_df_alternatif)
                 csv_alternatif = liste_courses_df_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
