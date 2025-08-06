@@ -1006,7 +1006,7 @@ def main():
     )
 
     st.sidebar.subheader("Fichiers de données")
-    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
+    #st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
