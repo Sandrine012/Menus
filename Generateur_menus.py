@@ -475,8 +475,10 @@ class MenusHistoryManager:
         self.df_menus_historique.dropna(subset=["Date"], inplace=True)
         if 'Date' in self.df_menus_historique.columns:
             self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
+            self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
         else:
             logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
+            self.recettes_historique_counts = {}
 
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
@@ -541,8 +543,14 @@ class MenuGenerator:
 
     def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
         return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
+    
+    def _get_historical_frequency(self, recette_id):
+        return self.menus_history_manager.recettes_historique_counts.get(recette_id, 0)
 
-    def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req):
+    def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None):
+        if exclure_recettes_ids is None:
+            exclure_recettes_ids = set()
+
         candidates = []
         anti_gaspi_candidates = []
         recettes_scores_dispo = {}
@@ -554,6 +562,10 @@ class MenuGenerator:
 
         for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
             nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
+
+            if recette_id_str_cand in exclure_recettes_ids:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu réaliste.")
+                continue
 
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
@@ -605,21 +617,27 @@ class MenuGenerator:
             logger.debug("Aucun candidat trouvé après le filtrage initial.")
             return [], {}
 
-        candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+        # Tri des candidats. Pour le menu alternatif, on privilégie la faible fréquence historique.
+        if exclure_recettes_ids:
+             candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
+        else:
+            candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+            
         anti_gaspi_triees = sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
 
         if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
             logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_triees[0], -1):.2f}).")
             return anti_gaspi_triees[:5], recettes_ingredients_manquants
         
-        logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats généraux.")
+        logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
         return candidates_triees[:10], recettes_ingredients_manquants
 
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str):
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, exclure_recettes_ids=None):
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
-            transportable_req_str, temps_req_str, nutrition_req_str
+            transportable_req_str, temps_req_str, nutrition_req_str,
+            exclure_recettes_ids=exclure_recettes_ids
         )
         if not recettes_candidates_initiales:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
@@ -674,10 +692,18 @@ class MenuGenerator:
                     logger.debug(f"Candidat général {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
 
             if candidates_valides_motcle:
-                recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                # Si c'est le menu alternatif, on trie par fréquence historique (faible en premier)
+                if exclure_recettes_ids:
+                    recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: self._get_historical_frequency(r_id))[0]
+                # Sinon on trie par score de disponibilité
+                else:
+                    recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
                 logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             elif recettes_candidates_initiales:
-                recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                if exclure_recettes_ids:
+                    recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: self._get_historical_frequency(r_id))[0]
+                else:
+                    recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
                 logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if recette_choisie_final:
@@ -757,7 +783,10 @@ class MenuGenerator:
         return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
 
 
-    def generer_menu(self):
+    def generer_menu(self, mode, exclure_recettes_ids=None):
+        if exclure_recettes_ids is None:
+            exclure_recettes_ids = set()
+
         resultats_df_list = []
         repas_b_utilises_ids = []
         plats_transportables_semaine = {}
@@ -766,6 +795,10 @@ class MenuGenerator:
         
         ingredients_menu_cumules = {}
         
+        # Réinitialisation du stock pour le mode "alternatif" pour qu'il ne dépende pas du mode "realiste"
+        if mode == 'alternatif':
+            self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
+
         initial_stock_values = {
             row[COLONNE_ID_INGREDIENT]: float(row["Qte reste"])
             for _, row in self.recette_manager.df_ingredients_initial.iterrows()
@@ -796,7 +829,8 @@ class MenuGenerator:
             else:
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                    menu_recent_noms, transportable_req, temps_req, nutrition_req
+                    menu_recent_noms, transportable_req, temps_req, nutrition_req,
+                    exclure_recettes_ids=exclure_recettes_ids
                 )
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
@@ -1006,11 +1040,11 @@ def main():
     )
 
     st.sidebar.subheader("Fichiers de données")
-    #st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
+    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv", 
+        "Uploader Planning.csv (votre planning de repas)", 
         type="csv", 
         key="Planning.csv"
     )
@@ -1038,7 +1072,7 @@ def main():
 
     st.markdown("---")
     st.header("1. Générer et Exporter en 1 clic")
-    st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion.")
+    st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion. Il génère aussi un menu alternatif.")
     
     if st.button("🚀 Générer et Envoyer le Menu Réaliste (1 clic)", use_container_width=True):
         st.session_state['generation_reussie'] = False
@@ -1062,7 +1096,7 @@ def main():
                 st.error(f"Erreur de données : {ve}")
                 return
 
-        with st.spinner("Génération du menu réaliste et idéal..."):
+        with st.spinner("Génération du menu réaliste et alternatif..."):
             try:
                 # Génération du menu réaliste (avec décrémentation du stock)
                 menu_generator_realiste = MenuGenerator(
@@ -1073,12 +1107,15 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=False
                 )
-                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Génération du menu idéal (sans décrémentation du stock)
-                menu_generator_ideal = MenuGenerator(
+                # Extraction des IDs de recettes du menu réaliste pour les exclure du menu alternatif
+                recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
+
+                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu réaliste)
+                menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
                     dataframes["Planning"],
@@ -1086,9 +1123,9 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=True
                 )
-                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu()
-                st.session_state['df_menu_ideal'] = df_menu_ideal
-                st.session_state['liste_courses_ideal'] = liste_courses_ideal
+                df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
+                st.session_state['df_menu_alternatif'] = df_menu_alternatif
+                st.session_state['liste_courses_alternatif'] = liste_courses_alternatif
                 
             except Exception as e:
                 st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
@@ -1109,7 +1146,7 @@ def main():
     st.header("2. Générer les Menus")
     st.write("Cliquez sur le bouton ci-dessous pour générer les deux versions du menu hebdomadaire et leurs listes de courses.")
     
-    if st.button("🚀 Générer 2 Menus (Réaliste & Idéal)"):
+    if st.button("🚀 Générer 2 Menus (Réaliste & Alternatif)"):
         st.session_state['generation_reussie'] = False
         
         with st.spinner("Chargement des données Notion..."):
@@ -1142,12 +1179,15 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=False
                 )
-                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Génération du menu idéal (sans décrémentation du stock)
-                menu_generator_ideal = MenuGenerator(
+                # Extraction des IDs de recettes du menu réaliste pour les exclure du menu alternatif
+                recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
+
+                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu réaliste)
+                menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
                     dataframes["Planning"],
@@ -1155,9 +1195,9 @@ def main():
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=True
                 )
-                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu()
-                st.session_state['df_menu_ideal'] = df_menu_ideal
-                st.session_state['liste_courses_ideal'] = liste_courses_ideal
+                df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
+                st.session_state['df_menu_alternatif'] = df_menu_alternatif
+                st.session_state['liste_courses_alternatif'] = liste_courses_alternatif
                 
                 st.session_state['generation_reussie'] = True
             except ValueError as ve:
@@ -1171,7 +1211,7 @@ def main():
     if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
         st.success("🎉 Menus générés avec succès !")
 
-        tab_realiste, tab_ideal = st.tabs(["Menu Réaliste", "Menu Idéal"])
+        tab_realiste, tab_alternatif = st.tabs(["Menu Réaliste", "Menu Alternatif"])
         
         # --- Affichage dans l'onglet Menu Réaliste ---
         with tab_realiste:
@@ -1226,18 +1266,18 @@ def main():
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses réaliste.")
 
-        # --- Affichage dans l'onglet Menu Idéal ---
-        with tab_ideal:
-            st.header("Menu Idéal (sans décrémentation du stock)")
-            st.write("Ce menu a été généré en partant du principe que vous avez toujours tout en stock. Il n'est pas contraint par la consommation des jours précédents.")
-            st.dataframe(st.session_state['df_menu_ideal'])
+        # --- Affichage dans l'onglet Menu Alternatif ---
+        with tab_alternatif:
+            st.header("Menu Alternatif")
+            st.write("Ce menu propose des recettes alternatives qui n'ont pas été sélectionnées pour le menu réaliste, en privilégiant celles moins souvent cuisinées dans le passé.")
+            st.dataframe(st.session_state['df_menu_alternatif'])
             
             col1, col2 = st.columns(2)
             with col1:
                 # Bouton pour envoyer à Notion
-                if st.button("📤 Envoyer le menu IDÉAL à Notion", key="send_ideal"):
-                    with st.spinner("Envoi du menu idéal en cours..."):
-                        success, failure = add_menu_to_notion(st.session_state['df_menu_ideal'], ID_MENUS)
+                if st.button("📤 Envoyer le menu ALTERNATIF à Notion", key="send_alternatif"):
+                    with st.spinner("Envoi du menu alternatif en cours..."):
+                        success, failure = add_menu_to_notion(st.session_state['df_menu_alternatif'], ID_MENUS)
                         if success > 0:
                             st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
                         if failure > 0:
@@ -1246,38 +1286,38 @@ def main():
                             st.info("Aucun repas valide à ajouter.")
 
             with col2:
-                df_export_ideal = st.session_state['df_menu_ideal'].copy()
-                df_export_ideal = df_export_ideal.rename(columns={
+                df_export_alternatif = st.session_state['df_menu_alternatif'].copy()
+                df_export_alternatif = df_export_alternatif.rename(columns={
                     'Participant(s)': 'Participant(s)',
                     COLONNE_NOM: 'Nom',
                     'Date': 'Date'
                 })
-                if not pd.api.types.is_datetime64_any_dtype(df_export_ideal['Date']):
-                    df_export_ideal['Date'] = pd.to_datetime(df_export_ideal['Date'], errors='coerce')
-                df_export_ideal['Date'] = df_export_ideal['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                df_export_ideal = df_export_ideal[['Date', 'Participant(s)', 'Nom']]
-                csv_data_ideal = df_export_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                if not pd.api.types.is_datetime64_any_dtype(df_export_alternatif['Date']):
+                    df_export_alternatif['Date'] = pd.to_datetime(df_export_alternatif['Date'], errors='coerce')
+                df_export_alternatif['Date'] = df_export_alternatif['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                df_export_alternatif = df_export_alternatif[['Date', 'Participant(s)', 'Nom']]
+                csv_data_alternatif = df_export_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 
                 st.download_button(
-                    label="📥 Télécharger le menu IDÉAL en CSV",
-                    data=csv_data_ideal,
-                    file_name="menu_ideal.csv",
+                    label="📥 Télécharger le menu ALTERNATIF en CSV",
+                    data=csv_data_alternatif,
+                    file_name="menu_alternatif.csv",
                     mime="text/csv"
                 )
             
-            st.subheader("Liste de Courses Détaillée pour le Menu Idéal")
-            if st.session_state['liste_courses_ideal']:
-                liste_courses_df_ideal = pd.DataFrame(st.session_state['liste_courses_ideal'])
-                st.dataframe(liste_courses_df_ideal)
-                csv_ideal = liste_courses_df_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
+            st.subheader("Liste de Courses Détaillée pour le Menu Alternatif")
+            if st.session_state['liste_courses_alternatif']:
+                liste_courses_df_alternatif = pd.DataFrame(st.session_state['liste_courses_alternatif'])
+                st.dataframe(liste_courses_df_alternatif)
+                csv_alternatif = liste_courses_df_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 st.download_button(
-                    label="Télécharger la liste de courses IDÉALE (CSV)",
-                    data=csv_ideal,
-                    file_name="liste_courses_ideal.csv",
+                    label="Télécharger la liste de courses ALTERNATIVE (CSV)",
+                    data=csv_alternatif,
+                    file_name="liste_courses_alternatif.csv",
                     mime="text/csv",
                 )
             else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses idéale.")
+                st.info("Aucun ingrédient manquant identifié pour la liste de courses alternative.")
 
 
 if __name__ == "__main__":
