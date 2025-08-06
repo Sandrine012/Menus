@@ -820,9 +820,6 @@ class MenuGenerator:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
-            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
-            
-        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
             nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
@@ -960,7 +957,7 @@ class MenuGenerator:
                         # sans tenir compte du filtre de répétition. C'est déjà géré dans la fonction `generer_recettes_candidates`
                         # mais on peut aussi le faire ici en réutilisant la liste initiale.
                         recettes_candidates_ultime, _ = self.generer_recettes_candidates(
-                            date_repas, participants_str, participants_count, used_recipes_current_generation_set,
+                            date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                             transportable_req="non", temps_req="normal", nutrition_req="normal",
                             exclure_recettes_ids=exclure_recettes_ids
                         )
