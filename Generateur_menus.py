@@ -95,6 +95,8 @@ def prop_val(p,k):
     if k=="form":    fo=p["formula"]; return str(fo.get("number") or fo.get("string") or "")
     if k=="rollstr": return ", ".join(it["formula"].get("string") or "." for it in p["rollup"]["array"])
     if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
+    # Nouvelle propriété pour le numéro de l'intervalle
+    if k=="number":  return str(p.get("number") or "")
     return ""
 
 def extract_recettes(saison_filtre):
@@ -137,7 +139,8 @@ def extract_menus():
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
-HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste"]
+# Ajout de la colonne "Intervalle" pour les ingrédients.
+HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste", "Intervalle"]
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
@@ -155,12 +158,17 @@ def extract_ingredients():
             formula_result = qte_prop.get("formula", {})
             if formula_result.get("type") == "number":
                 qte = formula_result.get("number")
+
+        # Extraction de la nouvelle propriété "Intervalle"
+        intervalle = prop_val(pr.get("Intervalle"), "number")
+
         rows.append([
             p["id"],
             "".join(t["plain_text"] for t in pr["Nom"]["title"]),
             (pr["Type de stock"]["select"] or {}).get("name",""),
             unite,
-            str(qte or "")
+            str(qte or ""),
+            intervalle
         ])
     return pd.DataFrame(rows,columns=HDR_INGR)
 
@@ -403,6 +411,19 @@ class RecetteManager:
             logger.error(f"Erreur obtenir_qte_stock_initial_par_id pour {ing_page_id_str}: {e}")
             return 0.0
 
+    # Nouvelle méthode pour obtenir l'intervalle de répétition d'un ingrédient
+    def obtenir_intervalle_ingredient_par_id(self, ing_page_id_str):
+        try:
+            ing_page_id_str = str(ing_page_id_str)
+            intervalle = self.df_ingredients_initial.loc[self.df_ingredients_initial[COLONNE_ID_INGREDIENT].astype(str) == ing_page_id_str, 'Intervalle'].iloc[0]
+            return int(intervalle) if pd.notna(intervalle) and str(intervalle).isdigit() else 0
+        except (IndexError, KeyError, ValueError):
+            logger.debug(f"Intervalle non trouvé ou non valide pour l'ingrédient {ing_page_id_str}. Retourne 0.")
+            return 0
+        except Exception as e:
+            logger.error(f"Erreur lors de l'obtention de l'intervalle pour {ing_page_id_str}: {e}")
+            return 0
+
     def est_adaptee_aux_participants(self, recette_page_id_str, participants_str_codes):
         try:
             recette_page_id_str = str(recette_page_id_str)
@@ -480,6 +501,37 @@ class MenusHistoryManager:
             logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
             self.recettes_historique_counts = {}
 
+    # Nouvelle méthode pour vérifier la contrainte d'intervalle des ingrédients.
+    def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
+        """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
+        try:
+            df_hist = self.df_menus_historique
+            if df_hist.empty or intervalle_jours <= 0:
+                return False
+
+            debut = date_actuelle - timedelta(days=intervalle_jours)
+            
+            # On cherche les recettes dans l'historique qui contiennent cet ingrédient
+            # Cette logique est plus complexe et nécessite une base de données de liens
+            # ingrédient -> recette ou une recherche plus poussée.
+            # Pour l'instant, nous allons supposer que nous avons les IDs de recettes
+            # qui utilisent l'ingrédient.
+            # Une implémentation simple pourrait être de vérifier si la recette contient
+            # l'ingrédient, mais cela nécessiterait d'avoir le df_ingredients_recettes
+            # ici, ou de le passer en paramètre.
+            # Supposons ici que c'est une vérification simple sur le nom de la recette.
+            # L'approche correcte serait de stocker une relation ingrédient/recette dans
+            # une structure de données accessible facilement.
+            # Pour l'instant, on va simuler en passant l'info du RecetteManager.
+            # L'appelant doit fournir cette information.
+            
+            # La logique ci-dessous est un placeholder et doit être enrichie.
+            # La bonne implémentation serait dans le MenuGenerator, pas ici.
+            return False # Placeholder
+        except Exception as e:
+            logger.error(f"Erreur dans is_ingredient_recent pour {ingredient_id_str}: {e}")
+            return False
+
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock):
@@ -536,6 +588,59 @@ class MenuGenerator:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
+    # Nouvelle fonction pour vérifier la contrainte d'intervalle des ingrédients.
+    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
+        try:
+            # Récupère la liste des ingrédients pour la recette
+            ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
+            
+            for ing in ingredients_recette:
+                ing_id_str = str(ing.get("Ingrédient ok"))
+                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
+
+                # Récupère l'intervalle de répétition pour cet ingrédient
+                intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
+                if intervalle_jours <= 0:
+                    continue # Pas d'intervalle à respecter
+
+                # Vérifie si l'ingrédient a été consommé récemment
+                df_hist = self.menus_history_manager.df_menus_historique
+                if df_hist.empty: continue
+
+                # On doit trouver toutes les recettes historiques qui utilisent cet ingrédient
+                # et vérifier si l'une d'entre elles est dans la fenêtre d'intervalle.
+                
+                # C'est la partie la plus complexe. Nous avons besoin de l'ID de l'ingrédient
+                # pour chercher dans le df_ingredients_recettes quelles recettes l'utilisent,
+                # puis vérifier ces recettes dans l'historique des menus.
+                
+                # Pour simplifier, nous allons reconstruire la logique ici.
+                df_ir = self.recette_manager.df_ingredients_recettes
+                recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
+                
+                if not recettes_utilisant_ing.empty:
+                    recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
+
+                    debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
+                    
+                    # On cherche les entrées de menu dans l'historique qui sont dans l'intervalle
+                    # ET qui utilisent l'une des recettes contenant l'ingrédient.
+                    mask_hist = (
+                        (df_hist['Date'] >= debut_intervalle) &
+                        (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
+                    )
+
+                    if not df_hist.loc[mask_hist].empty:
+                        nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
+                        logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
+                        return False # L'intervalle n'est pas respecté
+
+            return True # L'intervalle est respecté pour tous les ingrédients
+        except Exception as e:
+            logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
+            return True # Par défaut, on ne filtre pas en cas d'erreur
+
+
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str): return 1
         if participants_str_codes == "B": return 1
@@ -587,6 +692,10 @@ class MenuGenerator:
                 continue
             
             if self.est_recente(recette_id_str_cand, date_repas):
+                continue
+            
+            # Application de la nouvelle contrainte d'intervalle des ingrédients
+            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
                 continue
 
             if nutrition_req == "equilibré":
@@ -1102,7 +1211,8 @@ def main():
                 verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
                 verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
                 verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+                # Ajout de la nouvelle colonne "Intervalle" à la vérification
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
                 verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
             except ValueError as ve:
                 st.error(f"Erreur de données : {ve}")
@@ -1174,7 +1284,8 @@ def main():
                 verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
                 verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
                 verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité"], "Ingredients")
+                # Ajout de la nouvelle colonne "Intervalle" à la vérification
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
                 verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
             except ValueError as ve:
                 st.error(f"Erreur de données : {ve}")
