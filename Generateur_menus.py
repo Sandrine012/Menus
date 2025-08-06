@@ -854,7 +854,7 @@ class MenuGenerator:
         return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
 
 
-    def generer_menu(self, mode, exclure_recettes_ids=None):
+def generer_menu(self, mode, exclure_recettes_ids=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
 
@@ -953,12 +953,14 @@ class MenuGenerator:
                     # 3. On ignore le filtre d'anti-répétition des plats récents
                     if not recette_choisie_id:
                         logger.debug(f"Dernier recours: relâcher le délai d'anti-répétition des {self.params['NB_JOURS_ANTI_REPETITION']} jours.")
-                        # Pour cet ultime recours, on ne re-génère pas, mais on prend le premier candidat du lot initial
-                        # sans tenir compte du filtre de répétition. C'est déjà géré dans la fonction `generer_recettes_candidates`
-                        # mais on peut aussi le faire ici en réutilisant la liste initiale.
+                        # Correction: Appel direct avec des arguments positionnels corrects
                         recettes_candidates_ultime, _ = self.generer_recettes_candidates(
-                            date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                            transportable_req="non", temps_req="normal", nutrition_req="normal",
+                            date_repas_dt, 
+                            participants_str, 
+                            used_recipes_current_generation_set,
+                            "non",  # transportable_req
+                            "normal", # temps_req
+                            "normal", # nutrition_req
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         
