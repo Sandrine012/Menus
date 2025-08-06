@@ -1133,23 +1133,23 @@ def main():
             value=st.session_state['TEMPS_MAX_RAPIDE'],
             key="input_temps_rapide"
         )
-    
+
+        saison_actuelle = get_current_season()
+        saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
+        try:
+            index_saison_defaut = saisons_disponibles.index(saison_actuelle)
+        except ValueError:
+            index_saison_defaut = 0
+            
+        saison_selectionnee = st.selectbox(
+            "Sélectionnez la saison:",
+            options=saisons_disponibles,
+            index=index_saison_defaut,
+            key="saison_filtre"
+        )
+
     st.sidebar.header("Fichiers de données")
     
-    saison_actuelle = get_current_season()
-    saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
-    try:
-        index_saison_defaut = saisons_disponibles.index(saison_actuelle)
-    except ValueError:
-        index_saison_defaut = 0
-        
-    saison_selectionnee = st.sidebar.selectbox(
-        "Sélectionnez la saison:",
-        options=saisons_disponibles,
-        index=index_saison_defaut,
-        key="saison_filtre"
-    )
-
     st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
@@ -1198,6 +1198,8 @@ def main():
     if st.button("🚀 Générer et Envoyer le Menu Optimal (1 clic)", use_container_width=True):
         st.session_state['generation_reussie'] = False
         
+        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
+
         with st.spinner("Chargement des données Notion..."):
             try:
                 notion_data = load_notion_data(saison_selectionnee)
@@ -1276,6 +1278,8 @@ def main():
     if st.button("🚀 Générer 2 Menus (Optimal & Alternatif)"):
         st.session_state['generation_reussie'] = False
         
+        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
+
         with st.spinner("Chargement des données Notion..."):
             try:
                 notion_data = load_notion_data(saison_selectionnee)
