@@ -1010,7 +1010,7 @@ def main():
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
+        "Uploader Planning.csv", 
         type="csv", 
         key="Planning.csv"
     )
