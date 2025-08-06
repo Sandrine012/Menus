@@ -24,11 +24,11 @@ TEMPS_MAX_RAPIDE = 30
 REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
-NOTION_API_KEY           = st.secrets["notion_api_key"]
-ID_RECETTES              = st.secrets["notion_database_id_recettes"]
-ID_MENUS                 = st.secrets["notion_database_id_menus"]
-ID_INGREDIENTS           = st.secrets["notion_database_id_ingredients"]
-ID_INGREDIENTS_RECETTES  = st.secrets["notion_database_id_ingredients_recettes"]
+NOTION_API_KEY = st.secrets["notion_api_key"]
+ID_RECETTES = st.secrets["notion_database_id_recettes"]
+ID_MENUS = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
@@ -1062,8 +1062,9 @@ def main():
                 st.error(f"Erreur de données : {ve}")
                 return
 
-        with st.spinner("Génération du menu réaliste..."):
+        with st.spinner("Génération du menu réaliste et idéal..."):
             try:
+                # Génération du menu réaliste (avec décrémentation du stock)
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1075,6 +1076,20 @@ def main():
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu()
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
+
+                # Génération du menu idéal (sans décrémentation du stock)
+                menu_generator_ideal = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=True
+                )
+                df_menu_ideal, liste_courses_ideal = menu_generator_ideal.generer_menu()
+                st.session_state['df_menu_ideal'] = df_menu_ideal
+                st.session_state['liste_courses_ideal'] = liste_courses_ideal
+                
             except Exception as e:
                 st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
                 return
@@ -1153,7 +1168,7 @@ def main():
                 logger.exception("Erreur inattendue")
 
 
-if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
+    if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
         st.success("🎉 Menus générés avec succès !")
 
         tab_realiste, tab_ideal = st.tabs(["Menu Réaliste", "Menu Idéal"])
@@ -1162,10 +1177,7 @@ if 'generation_reussie' in st.session_state and st.session_state['generation_reu
         with tab_realiste:
             st.header("Menu Réaliste (avec décrémentation du stock)")
             st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
-            if 'df_menu_realiste' in st.session_state:
-                st.dataframe(st.session_state['df_menu_realiste'])
-            else:
-                st.info("Cliquez sur un bouton de génération pour afficher le menu réaliste.")
+            st.dataframe(st.session_state['df_menu_realiste'])
 
             col1, col2 = st.columns(2)
             with col1:
@@ -1181,28 +1193,27 @@ if 'generation_reussie' in st.session_state and st.session_state['generation_reu
                             st.info("Aucun repas valide à ajouter.")
 
             with col2:
-                if 'df_menu_realiste' in st.session_state:
-                    df_export_realiste = st.session_state['df_menu_realiste'].copy()
-                    df_export_realiste = df_export_realiste.rename(columns={
-                        'Participant(s)': 'Participant(s)',
-                        COLONNE_NOM: 'Nom',
-                        'Date': 'Date'
-                    })
-                    if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
-                        df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
-                    df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                    df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
-                    csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                    
-                    st.download_button(
-                        label="📥 Télécharger le menu RÉALISTE en CSV",
-                        data=csv_data_realiste,
-                        file_name="menu_realiste.csv",
-                        mime="text/csv"
-                    )
+                df_export_realiste = st.session_state['df_menu_realiste'].copy()
+                df_export_realiste = df_export_realiste.rename(columns={
+                    'Participant(s)': 'Participant(s)',
+                    COLONNE_NOM: 'Nom',
+                    'Date': 'Date'
+                })
+                if not pd.api.types.is_datetime64_any_dtype(df_export_realiste['Date']):
+                    df_export_realiste['Date'] = pd.to_datetime(df_export_realiste['Date'], errors='coerce')
+                df_export_realiste['Date'] = df_export_realiste['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                df_export_realiste = df_export_realiste[['Date', 'Participant(s)', 'Nom']]
+                csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                
+                st.download_button(
+                    label="📥 Télécharger le menu RÉALISTE en CSV",
+                    data=csv_data_realiste,
+                    file_name="menu_realiste.csv",
+                    mime="text/csv"
+                )
             
             st.subheader("Liste de Courses Détaillée pour le Menu Réaliste")
-            if 'liste_courses_realiste' in st.session_state and st.session_state['liste_courses_realiste']:
+            if st.session_state['liste_courses_realiste']:
                 liste_courses_df_realiste = pd.DataFrame(st.session_state['liste_courses_realiste'])
                 st.dataframe(liste_courses_df_realiste)
                 csv_realiste = liste_courses_df_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
@@ -1219,50 +1230,43 @@ if 'generation_reussie' in st.session_state and st.session_state['generation_reu
         with tab_ideal:
             st.header("Menu Idéal (sans décrémentation du stock)")
             st.write("Ce menu a été généré en partant du principe que vous avez toujours tout en stock. Il n'est pas contraint par la consommation des jours précédents.")
-            if 'df_menu_ideal' in st.session_state:
-                st.dataframe(st.session_state['df_menu_ideal'])
-            else:
-                st.info("Cliquez sur le bouton 'Générer 2 Menus (Réaliste & Idéal)' pour afficher le menu idéal.")
+            st.dataframe(st.session_state['df_menu_ideal'])
             
             col1, col2 = st.columns(2)
             with col1:
                 # Bouton pour envoyer à Notion
                 if st.button("📤 Envoyer le menu IDÉAL à Notion", key="send_ideal"):
-                    if 'df_menu_ideal' in st.session_state:
-                        with st.spinner("Envoi du menu idéal en cours..."):
-                            success, failure = add_menu_to_notion(st.session_state['df_menu_ideal'], ID_MENUS)
-                            if success > 0:
-                                st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
-                            if failure > 0:
-                                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
-                            if success == 0 and failure == 0:
-                                st.info("Aucun repas valide à ajouter.")
-                    else:
-                        st.warning("Veuillez d'abord générer le menu idéal.")
+                    with st.spinner("Envoi du menu idéal en cours..."):
+                        success, failure = add_menu_to_notion(st.session_state['df_menu_ideal'], ID_MENUS)
+                        if success > 0:
+                            st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
+                        if failure > 0:
+                            st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
+                        if success == 0 and failure == 0:
+                            st.info("Aucun repas valide à ajouter.")
 
             with col2:
-                if 'df_menu_ideal' in st.session_state:
-                    df_export_ideal = st.session_state['df_menu_ideal'].copy()
-                    df_export_ideal = df_export_ideal.rename(columns={
-                        'Participant(s)': 'Participant(s)',
-                        COLONNE_NOM: 'Nom',
-                        'Date': 'Date'
-                    })
-                    if not pd.api.types.is_datetime64_any_dtype(df_export_ideal['Date']):
-                        df_export_ideal['Date'] = pd.to_datetime(df_export_ideal['Date'], errors='coerce')
-                    df_export_ideal['Date'] = df_export_ideal['Date'].dt.strftime('%Y-%m-%d %H:%M')
-                    df_export_ideal = df_export_ideal[['Date', 'Participant(s)', 'Nom']]
-                    csv_data_ideal = df_export_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                    
-                    st.download_button(
-                        label="📥 Télécharger le menu IDÉAL en CSV",
-                        data=csv_data_ideal,
-                        file_name="menu_ideal.csv",
-                        mime="text/csv"
-                    )
+                df_export_ideal = st.session_state['df_menu_ideal'].copy()
+                df_export_ideal = df_export_ideal.rename(columns={
+                    'Participant(s)': 'Participant(s)',
+                    COLONNE_NOM: 'Nom',
+                    'Date': 'Date'
+                })
+                if not pd.api.types.is_datetime64_any_dtype(df_export_ideal['Date']):
+                    df_export_ideal['Date'] = pd.to_datetime(df_export_ideal['Date'], errors='coerce')
+                df_export_ideal['Date'] = df_export_ideal['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                df_export_ideal = df_export_ideal[['Date', 'Participant(s)', 'Nom']]
+                csv_data_ideal = df_export_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                
+                st.download_button(
+                    label="📥 Télécharger le menu IDÉAL en CSV",
+                    data=csv_data_ideal,
+                    file_name="menu_ideal.csv",
+                    mime="text/csv"
+                )
             
             st.subheader("Liste de Courses Détaillée pour le Menu Idéal")
-            if 'liste_courses_ideal' in st.session_state and st.session_state['liste_courses_ideal']:
+            if st.session_state['liste_courses_ideal']:
                 liste_courses_df_ideal = pd.DataFrame(st.session_state['liste_courses_ideal'])
                 st.dataframe(liste_courses_df_ideal)
                 csv_ideal = liste_courses_df_ideal.to_csv(index=False, sep=';', encoding='utf-8-sig')
@@ -1274,7 +1278,6 @@ if 'generation_reussie' in st.session_state and st.session_state['generation_reu
                 )
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses idéale.")
-
 
 
 if __name__ == "__main__":
