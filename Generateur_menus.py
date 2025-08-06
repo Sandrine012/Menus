@@ -820,6 +820,9 @@ class MenuGenerator:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
             
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
+            jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
+            
+        for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
             nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
             
@@ -875,9 +878,7 @@ class MenuGenerator:
             if isinstance(row["Qte reste"], str) and row["Qte reste"].replace('.', '', 1).isdigit()
         }
 
-        planning_sorted = self.df_planning.sort_values("Date")
-        
-        for index, repas_planning_row in planning_sorted.iterrows():
+        for _, repas_planning_row in self.df_planning.sort_values("Date").iterrows():
             date_repas_dt = repas_planning_row["Date"]
             participants_str = str(repas_planning_row["Participants"])
             participants_count = self.compter_participants(participants_str)
@@ -899,82 +900,18 @@ class MenuGenerator:
                 if recette_choisie_id:
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
             else:
-                # Première tentative de génération avec toutes les contraintes
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                     menu_recent_noms, transportable_req, temps_req, nutrition_req,
                     exclure_recettes_ids=exclure_recettes_ids
                 )
-
-                if recette_choisie_id is None:
-                    # Logique de "dernier recours" si la première tentative échoue
-                    logger.warning(f"Pas de recette trouvée pour {date_repas_dt.strftime('%d/%m/%Y')}. Tentative de relâcher les contraintes.")
-                    
-                    # Relâchement des contraintes une par une (dans un ordre de priorité inverse)
-                    
-                    # 1. On ignore le filtre "équilibré"
-                    if nutrition_req == "equilibré":
-                        logger.debug("Tentative de relâcher la contrainte nutritionnelle.")
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                            menu_recent_noms, transportable_req, temps_req, "normal",
-                            exclure_recettes_ids=exclure_recettes_ids
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += "Contrainte nutritionnelle relâchée. "
-                    
-                    if not recette_choisie_id and temps_req in ["express", "rapide"]:
-                        logger.debug("Tentative de relâcher la contrainte de temps.")
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                            menu_recent_noms, transportable_req, "normal", nutrition_req,
-                            exclure_recettes_ids=exclure_recettes_ids
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += "Contrainte de temps relâchée. "
-
-                    if not recette_choisie_id and transportable_req == "oui":
-                        logger.debug("Tentative de relâcher la contrainte de transport.")
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                            menu_recent_noms, "non", temps_req, nutrition_req,
-                            exclure_recettes_ids=exclure_recettes_ids
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += "Contrainte de transport relâchée. "
-
-                    # 2. On ignore le filtre de répétition des recettes sur la même semaine des années précédentes
-                    if not recette_choisie_id:
-                        logger.debug("Tentative d'ignorer le filtre de répétition sur les années précédentes.")
-                        # Cette logique est déjà gérée dans _traiter_menu_standard en ne privilégiant pas ces recettes si d'autres sont disponibles.
-                        # Mais on peut l'ignorer totalement si on ne trouve rien.
-                        # Pour l'instant, laissons tel quel, la logique du tri est déjà un bon "dernier recours".
-
-                    # 3. On ignore le filtre d'anti-répétition des plats récents
-                    if not recette_choisie_id:
-                        logger.debug(f"Dernier recours: relâcher le délai d'anti-répétition des {self.params['NB_JOURS_ANTI_REPETITION']} jours.")
-                        # Correction: Appel direct avec des arguments positionnels corrects
-                        recettes_candidates_ultime, _ = self.generer_recettes_candidates(
-                            date_repas_dt, 
-                            participants_str, 
-                            used_recipes_current_generation_set,
-                            "non",  # transportable_req
-                            "normal", # temps_req
-                            "normal", # nutrition_req
-                            exclure_recettes_ids=exclure_recettes_ids
-                        )
-                        
-                        if recettes_candidates_ultime:
-                            recette_choisie_id = recettes_candidates_ultime[0]
-                            remarques_repas += "Contraintes de répétition et de spécificité relâchées. "
-
                 if recette_choisie_id:
                     nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-                    remarques_repas = remarques_repas if remarques_repas else "Généré automatiquement"
+                    remarques_repas = "Généré automatiquement"
                 else:
                     nom_plat_final = "Recette non trouvée"
-                    remarques_repas = "Aucune recette appropriée trouvée selon les critères, même relâchés."
+                    remarques_repas = "Aucune recette appropriée trouvée selon les critères."
 
             if recette_choisie_id:
                 ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
@@ -1196,23 +1133,23 @@ def main():
             value=st.session_state['TEMPS_MAX_RAPIDE'],
             key="input_temps_rapide"
         )
-
-        saison_actuelle = get_current_season()
-        saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
-        try:
-            index_saison_defaut = saisons_disponibles.index(saison_actuelle)
-        except ValueError:
-            index_saison_defaut = 0
-            
-        saison_selectionnee = st.selectbox(
-            "Sélectionnez la saison:",
-            options=saisons_disponibles,
-            index=index_saison_defaut,
-            key="saison_filtre"
-        )
-
+    
     st.sidebar.header("Fichiers de données")
     
+    saison_actuelle = get_current_season()
+    saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
+    try:
+        index_saison_defaut = saisons_disponibles.index(saison_actuelle)
+    except ValueError:
+        index_saison_defaut = 0
+        
+    saison_selectionnee = st.sidebar.selectbox(
+        "Sélectionnez la saison:",
+        options=saisons_disponibles,
+        index=index_saison_defaut,
+        key="saison_filtre"
+    )
+
     st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
@@ -1261,8 +1198,6 @@ def main():
     if st.button("🚀 Générer et Envoyer le Menu Optimal (1 clic)", use_container_width=True):
         st.session_state['generation_reussie'] = False
         
-        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
-
         with st.spinner("Chargement des données Notion..."):
             try:
                 notion_data = load_notion_data(saison_selectionnee)
@@ -1294,7 +1229,7 @@ def main():
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
-                    dataframes["Planning"],
+    dataframes["Planning"],
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"],
                     ne_pas_decrementer_stock=False,
@@ -1341,8 +1276,6 @@ def main():
     if st.button("🚀 Générer 2 Menus (Optimal & Alternatif)"):
         st.session_state['generation_reussie'] = False
         
-        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
-
         with st.spinner("Chargement des données Notion..."):
             try:
                 notion_data = load_notion_data(saison_selectionnee)
