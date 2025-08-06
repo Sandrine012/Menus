@@ -854,7 +854,7 @@ class MenuGenerator:
         return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
 
 
-def generer_menu(self, mode, exclure_recettes_ids=None):
+    def generer_menu(self, mode, exclure_recettes_ids=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
 
