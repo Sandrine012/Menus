@@ -564,7 +564,7 @@ class MenuGenerator:
             nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
 
             if recette_id_str_cand in exclure_recettes_ids:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu réaliste.")
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
                 continue
 
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
@@ -1084,9 +1084,9 @@ def main():
 
     st.markdown("---")
     st.header("1. Générer et Exporter en 1 clic")
-    st.write("Ce bouton charge les données, génère le menu réaliste et l'envoie à Notion. Il génère aussi un menu alternatif.")
+    st.write("Ce bouton charge les données, génère le menu Optimal et l'envoie à Notion. Il génère aussi un menu alternatif.")
     
-    if st.button("🚀 Générer et Envoyer le Menu Réaliste (1 clic)", use_container_width=True):
+    if st.button("🚀 Générer et Envoyer le Menu Optimal (1 clic)", use_container_width=True):
         st.session_state['generation_reussie'] = False
         
         with st.spinner("Chargement des données Notion..."):
@@ -1108,9 +1108,9 @@ def main():
                 st.error(f"Erreur de données : {ve}")
                 return
 
-        with st.spinner("Génération du menu réaliste et alternatif..."):
+        with st.spinner("Génération du menu Optimal et alternatif..."):
             try:
-                # Génération du menu réaliste (avec décrémentation du stock)
+                # Génération du menu Optimal (avec décrémentation du stock)
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1123,10 +1123,10 @@ def main():
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Extraction des IDs de recettes du menu réaliste pour les exclure du menu alternatif
+                # Extraction des IDs de recettes du menu Optimal pour les exclure du menu alternatif
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
-                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu réaliste)
+                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu Optimal)
                 menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1158,7 +1158,7 @@ def main():
     st.header("2. Générer les Menus")
     st.write("Cliquez sur le bouton ci-dessous pour générer les deux versions du menu hebdomadaire et leurs listes de courses.")
     
-    if st.button("🚀 Générer 2 Menus (Réaliste & Alternatif)"):
+    if st.button("🚀 Générer 2 Menus (Optimal & Alternatif)"):
         st.session_state['generation_reussie'] = False
         
         with st.spinner("Chargement des données Notion..."):
@@ -1182,7 +1182,7 @@ def main():
 
         with st.spinner("Génération des deux menus en cours..."):
             try:
-                # Génération du menu réaliste (avec décrémentation du stock)
+                # Génération du menu Optimal (avec décrémentation du stock)
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1195,10 +1195,10 @@ def main():
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Extraction des IDs de recettes du menu réaliste pour les exclure du menu alternatif
+                # Extraction des IDs de recettes du menu Optimal pour les exclure du menu alternatif
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
-                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu réaliste)
+                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu Optimal)
                 menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
@@ -1223,23 +1223,23 @@ def main():
     if 'generation_reussie' in st.session_state and st.session_state['generation_reussie']:
         st.success("🎉 Menus générés avec succès !")
 
-        tab_realiste, tab_alternatif = st.tabs(["Menu Réaliste", "Menu Alternatif"])
+        tab_realiste, tab_alternatif = st.tabs(["Menu Optimal", "Menu Alternatif"])
         
-        # --- Affichage dans l'onglet Menu Réaliste ---
+        # --- Affichage dans l'onglet Menu Optimal ---
         with tab_realiste:
-            st.header("Menu Réaliste (avec décrémentation du stock)")
+            st.header("Menu Optimal (avec décrémentation du stock)")
             st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
             if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
                 st.dataframe(st.session_state['df_menu_realiste'])
             else:
-                st.info("Aucun menu réaliste n'a été généré.")
+                st.info("Aucun menu Optimal n'a été généré.")
 
             col1, col2 = st.columns(2)
             with col1:
                 # Bouton pour envoyer à Notion
-                if st.button("📤 Envoyer le menu RÉALISTE à Notion", key="send_realiste"):
+                if st.button("📤 Envoyer le menu Optimal à Notion", key="send_realiste"):
                     if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
-                        with st.spinner("Envoi du menu réaliste en cours..."):
+                        with st.spinner("Envoi du menu Optimal en cours..."):
                             success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
                             if success > 0:
                                 st.success(f"✅ {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
@@ -1248,7 +1248,7 @@ def main():
                             if success == 0 and failure == 0:
                                 st.info("Aucun repas valide à ajouter.")
                     else:
-                        st.warning("Veuillez d'abord générer un menu réaliste.")
+                        st.warning("Veuillez d'abord générer un menu Optimal.")
 
             with col2:
                 if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
@@ -1265,38 +1265,38 @@ def main():
                     csv_data_realiste = df_export_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
                     
                     st.download_button(
-                        label="📥 Télécharger le menu RÉALISTE en CSV",
+                        label="📥 Télécharger le menu Optimal en CSV",
                         data=csv_data_realiste,
                         file_name="menu_realiste.csv",
                         mime="text/csv"
                     )
                 else:
                     st.download_button(
-                        label="📥 Télécharger le menu RÉALISTE en CSV",
+                        label="📥 Télécharger le menu Optimal en CSV",
                         data=";;",
                         file_name="menu_realiste.csv",
                         mime="text/csv",
                         disabled=True
                     )
             
-            st.subheader("Liste de Courses Détaillée pour le Menu Réaliste")
+            st.subheader("Liste de Courses Détaillée pour le Menu Optimal")
             if 'liste_courses_realiste' in st.session_state and st.session_state['liste_courses_realiste']:
                 liste_courses_df_realiste = pd.DataFrame(st.session_state['liste_courses_realiste'])
                 st.dataframe(liste_courses_df_realiste)
                 csv_realiste = liste_courses_df_realiste.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 st.download_button(
-                    label="Télécharger la liste de courses RÉALISTE (CSV)",
+                    label="Télécharger la liste de courses Optimal (CSV)",
                     data=csv_realiste,
                     file_name="liste_courses_realiste.csv",
                     mime="text/csv",
                 )
             else:
-                st.info("Aucun ingrédient manquant identifié pour la liste de courses réaliste.")
+                st.info("Aucun ingrédient manquant identifié pour la liste de courses Optimal.")
 
         # --- Affichage dans l'onglet Menu Alternatif ---
         with tab_alternatif:
             st.header("Menu Alternatif")
-            st.write("Ce menu propose des recettes alternatives qui n'ont pas été sélectionnées pour le menu réaliste, en privilégiant celles moins souvent cuisinées dans le passé.")
+            st.write("Ce menu propose des recettes alternatives qui n'ont pas été sélectionnées pour le menu Optimal, en privilégiant celles moins souvent cuisinées dans le passé.")
             if 'df_menu_alternatif' in st.session_state and not st.session_state['df_menu_alternatif'].empty:
                 st.dataframe(st.session_state['df_menu_alternatif'])
             else:
