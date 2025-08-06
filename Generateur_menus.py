@@ -11,17 +11,19 @@ from notion_client.errors import RequestTimeoutError, APIResponseError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Constantes globales
-NB_JOURS_ANTI_REPETITION = 42
+# Constantes par défaut (seront remplacées par les paramètres de l'utilisateur)
+NB_JOURS_ANTI_REPETITION_DEFAULT = 42
+REPAS_EQUILIBRE_DEFAULT = 700
+TEMPS_MAX_EXPRESS_DEFAULT = 20
+TEMPS_MAX_RAPIDE_DEFAULT = 30
+VALEUR_DEFAUT_TEMPS_PREPARATION = 10
+
+# Colonnes
 COLONNE_NOM = "Nom"
 COLONNE_TEMPS_TOTAL = "Temps_total"
 COLONNE_ID_RECETTE = "Page_ID"
 COLONNE_ID_INGREDIENT = "Page_ID"
 COLONNE_AIME_PAS_PRINCIP = "Aime_pas_princip"
-VALEUR_DEFAUT_TEMPS_PREPARATION = 10
-TEMPS_MAX_EXPRESS = 20
-TEMPS_MAX_RAPIDE = 30
-REPAS_EQUILIBRE = 700
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
 NOTION_API_KEY = st.secrets["notion_api_key"]
@@ -95,7 +97,6 @@ def prop_val(p,k):
     if k=="form":    fo=p["formula"]; return str(fo.get("number") or fo.get("string") or "")
     if k=="rollstr": return ", ".join(it["formula"].get("string") or "." for it in p["rollup"]["array"])
     if k=="selcb":   return "Oui" if (t=="select" and (p["select"] or {}).get("name","").lower()=="oui") or (t=="checkbox" and p["checkbox"]) else ""
-    # Nouvelle propriété pour le numéro de l'intervalle
     if k=="number":  return str(p.get("number") or "")
     return ""
 
@@ -411,7 +412,6 @@ class RecetteManager:
             logger.error(f"Erreur obtenir_qte_stock_initial_par_id pour {ing_page_id_str}: {e}")
             return 0.0
 
-    # Nouvelle méthode pour obtenir l'intervalle de répétition d'un ingrédient
     def obtenir_intervalle_ingredient_par_id(self, ing_page_id_str):
         try:
             ing_page_id_str = str(ing_page_id_str)
@@ -501,7 +501,6 @@ class MenusHistoryManager:
             logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
             self.recettes_historique_counts = {}
 
-    # Nouvelle méthode pour vérifier la contrainte d'intervalle des ingrédients.
     def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
         """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
         try:
@@ -511,22 +510,6 @@ class MenusHistoryManager:
 
             debut = date_actuelle - timedelta(days=intervalle_jours)
             
-            # On cherche les recettes dans l'historique qui contiennent cet ingrédient
-            # Cette logique est plus complexe et nécessite une base de données de liens
-            # ingrédient -> recette ou une recherche plus poussée.
-            # Pour l'instant, nous allons supposer que nous avons les IDs de recettes
-            # qui utilisent l'ingrédient.
-            # Une implémentation simple pourrait être de vérifier si la recette contient
-            # l'ingrédient, mais cela nécessiterait d'avoir le df_ingredients_recettes
-            # ici, ou de le passer en paramètre.
-            # Supposons ici que c'est une vérification simple sur le nom de la recette.
-            # L'approche correcte serait de stocker une relation ingrédient/recette dans
-            # une structure de données accessible facilement.
-            # Pour l'instant, on va simuler en passant l'info du RecetteManager.
-            # L'appelant doit fournir cette information.
-            
-            # La logique ci-dessous est un placeholder et doit être enrichie.
-            # La bonne implémentation serait dans le MenuGenerator, pas ici.
             return False # Placeholder
         except Exception as e:
             logger.error(f"Erreur dans is_ingredient_recent pour {ingredient_id_str}: {e}")
@@ -534,7 +517,7 @@ class MenusHistoryManager:
 
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
-    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock):
+    def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
             self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
@@ -546,6 +529,7 @@ class MenuGenerator:
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         self.menus_history_manager = MenusHistoryManager(df_menus_hist)
         self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
+        self.params = params
 
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
@@ -572,8 +556,8 @@ class MenuGenerator:
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
                 return False
 
-            debut = date_actuelle - timedelta(days=NB_JOURS_ANTI_REPETITION)
-            fin = date_actuelle + timedelta(days=NB_JOURS_ANTI_REPETITION)
+            debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            fin = date_actuelle + timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
             mask = (
                 (df_hist['Recette'].astype(str) == str(recette_page_id_str)) &
                 (df_hist['Date'] >= debut) &
@@ -581,40 +565,28 @@ class MenuGenerator:
             )
             is_recent = not df_hist.loc[mask].empty
             if is_recent:
-                logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Est récente (dans les {NB_JOURS_ANTI_REPETITION} jours)")
+                logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Est récente (dans les {self.params['NB_JOURS_ANTI_REPETITION']} jours)")
             return is_recent
 
         except Exception as e:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
-    # Nouvelle fonction pour vérifier la contrainte d'intervalle des ingrédients.
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
-            # Récupère la liste des ingrédients pour la recette
             ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
             
             for ing in ingredients_recette:
                 ing_id_str = str(ing.get("Ingrédient ok"))
                 if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
 
-                # Récupère l'intervalle de répétition pour cet ingrédient
                 intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
                 if intervalle_jours <= 0:
-                    continue # Pas d'intervalle à respecter
+                    continue
 
-                # Vérifie si l'ingrédient a été consommé récemment
                 df_hist = self.menus_history_manager.df_menus_historique
                 if df_hist.empty: continue
 
-                # On doit trouver toutes les recettes historiques qui utilisent cet ingrédient
-                # et vérifier si l'une d'entre elles est dans la fenêtre d'intervalle.
-                
-                # C'est la partie la plus complexe. Nous avons besoin de l'ID de l'ingrédient
-                # pour chercher dans le df_ingredients_recettes quelles recettes l'utilisent,
-                # puis vérifier ces recettes dans l'historique des menus.
-                
-                # Pour simplifier, nous allons reconstruire la logique ici.
                 df_ir = self.recette_manager.df_ingredients_recettes
                 recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
                 
@@ -623,8 +595,6 @@ class MenuGenerator:
 
                     debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
                     
-                    # On cherche les entrées de menu dans l'historique qui sont dans l'intervalle
-                    # ET qui utilisent l'une des recettes contenant l'ingrédient.
                     mask_hist = (
                         (df_hist['Date'] >= debut_intervalle) &
                         (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
@@ -633,13 +603,12 @@ class MenuGenerator:
                     if not df_hist.loc[mask_hist].empty:
                         nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
                         logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
-                        return False # L'intervalle n'est pas respecté
+                        return False
 
-            return True # L'intervalle est respecté pour tous les ingrédients
+            return True
         except Exception as e:
             logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
-            return True # Par défaut, on ne filtre pas en cas d'erreur
-
+            return True
 
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str): return 1
@@ -677,11 +646,11 @@ class MenuGenerator:
                 continue
 
             temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
-            if temps_req == "express" and temps_total > TEMPS_MAX_EXPRESS:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({TEMPS_MAX_EXPRESS} min).")
+            if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({self.params['TEMPS_MAX_EXPRESS']} min).")
                 continue
-            if temps_req == "rapide" and temps_total > TEMPS_MAX_RAPIDE:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({TEMPS_MAX_RAPIDE} min).")
+            if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({self.params['TEMPS_MAX_RAPIDE']} min).")
                 continue
 
             if recette_id_str_cand in used_recipes_in_current_gen:
@@ -694,7 +663,6 @@ class MenuGenerator:
             if self.est_recente(recette_id_str_cand, date_repas):
                 continue
             
-            # Application de la nouvelle contrainte d'intervalle des ingrédients
             if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
                 continue
 
@@ -704,8 +672,8 @@ class MenuGenerator:
                         calories = float(self.recette_manager.df_recettes.loc[recette_id_str_cand, "Calories"])
                     else:
                         calories = float(self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_id_str_cand]["Calories"].iloc[0])
-                    if calories > REPAS_EQUILIBRE:
-                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({REPAS_EQUILIBRE}).")
+                    if calories > self.params['REPAS_EQUILIBRE']:
+                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({self.params['REPAS_EQUILIBRE']}).")
                         continue
                 except (KeyError, ValueError, TypeError, IndexError):
                     logger.debug(f"Calories non valides/trouvées pour {nom_recette_cand} ({recette_id_str_cand}) (filtre nutrition).")
@@ -726,7 +694,6 @@ class MenuGenerator:
             logger.debug("Aucun candidat trouvé après le filtrage initial.")
             return [], {}
 
-        # Tri des candidats. Pour le menu alternatif, on privilégie la faible fréquence historique.
         if exclure_recettes_ids:
              candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
         else:
@@ -801,10 +768,8 @@ class MenuGenerator:
                     logger.debug(f"Candidat général {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
 
             if candidates_valides_motcle:
-                # Si c'est le menu alternatif, on trie par fréquence historique (faible en premier)
                 if exclure_recettes_ids:
                     recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: self._get_historical_frequency(r_id))[0]
-                # Sinon on trie par score de disponibilité
                 else:
                     recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
                 logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
@@ -904,7 +869,6 @@ class MenuGenerator:
         
         ingredients_menu_cumules = {}
         
-        # Réinitialisation du stock pour le mode "alternatif" pour qu'il ne dépende pas du mode "realiste"
         if mode == 'alternatif':
             self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
 
@@ -1000,13 +964,6 @@ class MenuGenerator:
 
         if not df_menu_genere.empty:
             logger.info(f"Nombre de lignes totales générées : {len(df_menu_genere)}")
-            # Ajout de la colonne de l'ID de recette pour le traitement Notion
-            # La colonne est déjà ajoutée dans _ajouter_resultat, cette partie est inutile
-            # df_menu_genere['Recette_ID'] = [
-            #     self.recette_manager.df_recettes[self.recette_manager.df_recettes[COLONNE_NOM] == row[COLONNE_NOM]][COLONNE_ID_RECETTE].iloc[0]
-            #     if row[COLONNE_NOM] in self.recette_manager.df_recettes[COLONNE_NOM].values else None
-            #     for _, row in df_menu_genere.iterrows()
-            # ]
             if 'Date' in df_menu_genere.columns:
                 df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'], format="%d/%m/%Y %H:%M", errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
         
@@ -1132,7 +1089,52 @@ def main():
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
     
-    st.sidebar.header("Paramètres")
+    # --- Paramètres de génération (section dépliante) ---
+    with st.sidebar.expander("⚙️ Paramètres de génération"):
+        # Initialisation des valeurs par défaut
+        if 'NB_JOURS_ANTI_REPETITION' not in st.session_state:
+            st.session_state['NB_JOURS_ANTI_REPETITION'] = NB_JOURS_ANTI_REPETITION_DEFAULT
+        if 'REPAS_EQUILIBRE' not in st.session_state:
+            st.session_state['REPAS_EQUILIBRE'] = REPAS_EQUILIBRE_DEFAULT
+        if 'TEMPS_MAX_EXPRESS' not in st.session_state:
+            st.session_state['TEMPS_MAX_EXPRESS'] = TEMPS_MAX_EXPRESS_DEFAULT
+        if 'TEMPS_MAX_RAPIDE' not in st.session_state:
+            st.session_state['TEMPS_MAX_RAPIDE'] = TEMPS_MAX_RAPIDE_DEFAULT
+
+        # Inputs pour les paramètres
+        st.session_state['NB_JOURS_ANTI_REPETITION'] = st.number_input(
+            "Délai entre menus identiques (jours)", 
+            min_value=1, 
+            max_value=365, 
+            value=st.session_state['NB_JOURS_ANTI_REPETITION'],
+            key="input_jours_anti_repetition"
+        )
+        st.session_state['REPAS_EQUILIBRE'] = st.number_input(
+            "Calories max pour repas 'équilibré'", 
+            min_value=100, 
+            max_value=2000, 
+            step=50, 
+            value=st.session_state['REPAS_EQUILIBRE'],
+            key="input_repas_equilibre"
+        )
+        st.session_state['TEMPS_MAX_EXPRESS'] = st.number_input(
+            "Temps max pour repas 'express' (min)", 
+            min_value=5, 
+            max_value=60, 
+            step=5, 
+            value=st.session_state['TEMPS_MAX_EXPRESS'],
+            key="input_temps_express"
+        )
+        st.session_state['TEMPS_MAX_RAPIDE'] = st.number_input(
+            "Temps max pour repas 'rapide' (min)", 
+            min_value=5, 
+            max_value=90, 
+            step=5, 
+            value=st.session_state['TEMPS_MAX_RAPIDE'],
+            key="input_temps_rapide"
+        )
+    
+    st.sidebar.header("Fichiers de données")
     
     saison_actuelle = get_current_season()
     saisons_disponibles = ["Printemps", "Été", "Automne", "Hiver"]
@@ -1148,7 +1150,6 @@ def main():
         key="saison_filtre"
     )
 
-    st.sidebar.subheader("Fichiers de données")
     st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
@@ -1179,7 +1180,6 @@ def main():
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
-    # Initialisation des variables de session si elles n'existent pas
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
     if 'df_menu_realiste' not in st.session_state:
@@ -1211,7 +1211,6 @@ def main():
                 verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
                 verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
                 verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                # Ajout de la nouvelle colonne "Intervalle" à la vérification
                 verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
                 verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
             except ValueError as ve:
@@ -1220,30 +1219,36 @@ def main():
 
         with st.spinner("Génération du menu Optimal et alternatif..."):
             try:
-                # Génération du menu Optimal (avec décrémentation du stock)
+                params = {
+                    "NB_JOURS_ANTI_REPETITION": st.session_state['NB_JOURS_ANTI_REPETITION'],
+                    "REPAS_EQUILIBRE": st.session_state['REPAS_EQUILIBRE'],
+                    "TEMPS_MAX_EXPRESS": st.session_state['TEMPS_MAX_EXPRESS'],
+                    "TEMPS_MAX_RAPIDE": st.session_state['TEMPS_MAX_RAPIDE']
+                }
+
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
-                    dataframes["Planning"],
+    dataframes["Planning"],
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=False
+                    ne_pas_decrementer_stock=False,
+                    params=params
                 )
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Extraction des IDs de recettes du menu Optimal pour les exclure du menu alternatif
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
-                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu Optimal)
                 menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
                     dataframes["Planning"],
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=True
+                    ne_pas_decrementer_stock=True,
+                    params=params
                 )
                 df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
                 st.session_state['df_menu_alternatif'] = df_menu_alternatif
@@ -1284,7 +1289,6 @@ def main():
                 verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
                 verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
                 verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-                # Ajout de la nouvelle colonne "Intervalle" à la vérification
                 verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
                 verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
             except ValueError as ve:
@@ -1293,30 +1297,36 @@ def main():
 
         with st.spinner("Génération des deux menus en cours..."):
             try:
-                # Génération du menu Optimal (avec décrémentation du stock)
+                params = {
+                    "NB_JOURS_ANTI_REPETITION": st.session_state['NB_JOURS_ANTI_REPETITION'],
+                    "REPAS_EQUILIBRE": st.session_state['REPAS_EQUILIBRE'],
+                    "TEMPS_MAX_EXPRESS": st.session_state['TEMPS_MAX_EXPRESS'],
+                    "TEMPS_MAX_RAPIDE": st.session_state['TEMPS_MAX_RAPIDE']
+                }
+
                 menu_generator_realiste = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
                     dataframes["Planning"],
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=False
+                    ne_pas_decrementer_stock=False,
+                    params=params
                 )
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-                # Extraction des IDs de recettes du menu Optimal pour les exclure du menu alternatif
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
-                # Génération du menu alternatif (sans décrémentation du stock, et avec exclusion des recettes du menu Optimal)
                 menu_generator_alternatif = MenuGenerator(
                     dataframes["Menus"],
                     dataframes["Recettes"],
                     dataframes["Planning"],
                     dataframes["Ingredients"],
                     dataframes["Ingredients_recettes"],
-                    ne_pas_decrementer_stock=True
+                    ne_pas_decrementer_stock=True,
+                    params=params
                 )
                 df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
                 st.session_state['df_menu_alternatif'] = df_menu_alternatif
@@ -1336,7 +1346,6 @@ def main():
 
         tab_realiste, tab_alternatif = st.tabs(["Menu Optimal", "Menu Alternatif"])
         
-        # --- Affichage dans l'onglet Menu Optimal ---
         with tab_realiste:
             st.header("Menu Optimal (avec décrémentation du stock)")
             st.write("Ce menu a été généré en tenant compte de la consommation de vos stocks au fil de la semaine.")
@@ -1347,7 +1356,6 @@ def main():
 
             col1, col2 = st.columns(2)
             with col1:
-                # Bouton pour envoyer à Notion
                 if st.button("📤 Envoyer le menu Optimal à Notion", key="send_realiste"):
                     if 'df_menu_realiste' in st.session_state and not st.session_state['df_menu_realiste'].empty:
                         with st.spinner("Envoi du menu Optimal en cours..."):
@@ -1404,7 +1412,6 @@ def main():
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses Optimal.")
 
-        # --- Affichage dans l'onglet Menu Alternatif ---
         with tab_alternatif:
             st.header("Menu Alternatif")
             st.write("Ce menu propose des recettes alternatives qui n'ont pas été sélectionnées pour le menu Optimal, en privilégiant celles moins souvent cuisinées dans le passé.")
@@ -1415,7 +1422,6 @@ def main():
             
             col1, col2 = st.columns(2)
             with col1:
-                # Bouton pour envoyer à Notion
                 if st.button("📤 Envoyer le menu ALTERNATIF à Notion", key="send_alternatif"):
                     if 'df_menu_alternatif' in st.session_state and not st.session_state['df_menu_alternatif'].empty:
                         with st.spinner("Envoi du menu alternatif en cours..."):
