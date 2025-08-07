@@ -510,8 +510,8 @@ class RecetteManager:
 class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
-        self.df_menus_historique = df_menus_hist.copy()
-        self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors="coerce")
+            self.df_menus_historique = df_menus_hist.copy()
+            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='%d/%m/%Y', errors="coerce")
         self.df_menus_historique.dropna(subset=["Date"], inplace=True)
         if 'Date' in self.df_menus_historique.columns:
             self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
@@ -539,7 +539,8 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
+            # Correction : Spécifiez le format de date
+            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], format='%d/%m/%Y', errors='coerce')
             self.df_planning.dropna(subset=['Date'], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
