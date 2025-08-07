@@ -1246,17 +1246,28 @@ def main():
             parse_dates=['Date'],
             dayfirst=True
         )
-        # Forcer conversion datetime stricte
+    
+        # Nettoyage des colonnes (espaces)
+        df_planning.columns = df_planning.columns.str.strip()
+    
+        # Conversion explicite et stricte en datetime
         df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
+    
+        # Debug : affichage type et valeurs nulles
+        st.write("Type colonne 'Date' :", df_planning['Date'].dtype)
+        st.write("Nombres de valeurs NaT dans 'Date' :", df_planning['Date'].isna().sum())
+    
+        # Supprimer lignes où date invalide
         if df_planning['Date'].isna().any():
-            st.warning("Certaines dates dans Planning.csv sont invalides et ont été supprimées.")
+            st.warning("⚠️ Certaines dates dans Planning.csv sont invalides et ont été supprimées.")
             df_planning = df_planning.dropna(subset=['Date'])
-
+    
         dataframes["Planning"] = df_planning
         st.sidebar.success("Planning.csv chargé avec succès.")
     except Exception as e:
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
+
 
 
     if 'generation_reussie' not in st.session_state:
