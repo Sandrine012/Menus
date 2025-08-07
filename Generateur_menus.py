@@ -1275,26 +1275,28 @@ if 'df_planning_drive' in st.session_state:
     dataframes["Planning"] = st.session_state['df_planning_drive']
 else:
     st.warning("Veuillez télécharger le planning via le bouton Google Drive.")
-    return
 
+    # Facultatif : uploader manuellement en dernier recours
+    uploaded_file = st.sidebar.file_uploader("Ou uploadez Planning.csv manuellement", type="csv")
+    if uploaded_file is not None:
+        try:
+            df_planning = pd.read_csv(
+                uploaded_file,
+                encoding='utf-8',
+                sep=';',
+                parse_dates=['Date'],
+                dayfirst=True
+            )
+            st.session_state['df_planning_drive'] = df_planning
+            dataframes["Planning"] = df_planning  # Pensez à mettre à jour aussi ici
+            st.session_state['planning_charge'] = True
+            st.sidebar.success("Planning.csv chargé manuellement.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors du chargement manuel : {e}")
     else:
-        st.warning("Veuillez télécharger le planning ou uploadez un fichier manuellement si besoin.")
-        # Facultatif : Pour uploader manuellement en dernier recours
-        uploaded_file = st.sidebar.file_uploader("Ou uploadez Planning.csv manuellement", type="csv")
-        if uploaded_file is not None:
-            try:
-                df_planning = pd.read_csv(
-                    uploaded_file,
-                    encoding='utf-8',
-                    sep=';',
-                    parse_dates=['Date'],
-                    dayfirst=True
-                )
-                st.session_state['df_planning_drive'] = df_planning
-                st.session_state['planning_charge'] = True
-                st.sidebar.success("Planning.csv chargé manuellement.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement manuel : {e}")
+        # Ici vous pouvez éventuellement mettre d'autres messages ou actions si pas d'upload
+        st.info("Aucun fichier uploadé manuellement.")
+
 
         dataframes = {}
         dataframes["Planning"] = df_planning
