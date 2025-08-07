@@ -2,4 +2,3 @@ streamlit
 notion-client
 pandas
 httpx
-gdown
