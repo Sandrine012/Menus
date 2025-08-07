@@ -1284,6 +1284,7 @@ def main():
             except Exception as e:
                 st.sidebar.error(f"Erreur lors du chargement manuel : {e}")
 
+        dataframes = {}
         dataframes["Planning"] = df_planning
         st.sidebar.success("Planning.csv chargé avec succès.")
     except Exception as e:
