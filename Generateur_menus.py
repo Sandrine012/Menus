@@ -1225,10 +1225,16 @@ def main():
 
     st.sidebar.header("Fichiers de données")
     
-    # ────── FONCTIONNALITÉ DE TÉLÉCHARGEMENT DIRECT ──────────────────
+  # ────── FONCTIONNALITÉ DE TÉLÉCHARGEMENT DIRECT ──────────────────
     st.sidebar.header("Télécharger un fichier depuis Google Drive")
     st.sidebar.info("Utilisez cette section pour télécharger un fichier sur votre appareil, sans le charger dans l'application.")
-    lien_gdrive_telechargement = st.sidebar.text_input("Collez l'URL de partage Google Drive du fichier CSV :", key="telechargement_url")
+    
+    # Remplacez "URL_PAR_DEFAUT" par le lien de votre fichier Google Drive.
+    lien_gdrive_telechargement = st.sidebar.text_input(
+        "Collez l'URL de partage Google Drive du fichier CSV :", 
+        value="https://drive.google.com/file/d/1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8/view", # <-- Ajoutez votre URL ici
+        key="telechargement_url"
+    )
 
     if lien_gdrive_telechargement:
         try:
