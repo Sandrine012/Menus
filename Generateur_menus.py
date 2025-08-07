@@ -552,24 +552,23 @@ class MenuGenerator:
 
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         try:
-            df_hist = self.menus_history_manager.df_menus_historique.copy()
-            if df_hist.empty:
+            df_hist = self.menus_history_manager.df_menus_historique
+            if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
                 return set()
-            
-            # Le code précédent était incomplet. Voici comment filtrer correctement.
-            semaine_actuelle = date_actuelle.isocalendar().week
-            
-            # Filtrer les recettes de la même semaine des années précédentes
-            df_semaine_hist = df_hist[df_hist['Semaine'] == semaine_actuelle]
-            
-            if df_semaine_hist.empty:
-                return set()
-                
-            return set(df_semaine_hist['Recette'].unique())
+
+            semaine_actuelle = date_actuelle.isocalendar()[1]
+            annee_actuelle = date_actuelle.year
+
+            df_menus_semaine = df_hist[
+                (df_hist["Semaine"].astype(int) == semaine_actuelle) &
+                (df_hist["Date"].dt.year < annee_actuelle) &
+                pd.notna(df_hist["Recette"])
+            ]
+            return set(df_menus_semaine["Recette"].astype(str).unique())
         except Exception as e:
-            logger.error(f"Erreur dans recettes_meme_semaine_annees_precedentes : {e}")
+            logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
-            
+
     def est_recente(self, recette_page_id_str, date_actuelle):
         try:
             df_hist = self.menus_history_manager.df_menus_historique
