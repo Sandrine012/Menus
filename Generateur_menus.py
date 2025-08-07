@@ -1161,6 +1161,8 @@ def load_notion_data(saison_filtre_selection):
     }
 
 def main():
+    dataframes = {}
+
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
@@ -1247,24 +1249,34 @@ def main():
                 st.sidebar.error(f"Erreur lors du téléchargement : {e}")
     
     # Chargement automatique du fichier planning.csv si présent localement
-    if os.path.exists(planning_filepath) and not st.session_state.get('planning_charge', False):
-        try:
-            df_planning = pd.read_csv(
-                planning_filepath,
-                encoding='utf-8',
-                sep=';',
-                parse_dates=['Date'],
-                dayfirst=True
-            )
-            st.session_state['df_planning_drive'] = df_planning
-            st.session_state['planning_charge'] = True
-            st.sidebar.success(f"Planning.csv chargé depuis Google Drive ({planning_filepath})")
-        except Exception as e:
-            st.sidebar.error(f"Erreur lors du chargement de Planning.csv depuis Google Drive : {e}")
-    
-    # Utilisez df_planning depuis session_state ou affichez un warning si absent
-    if 'df_planning_drive' in st.session_state:
-        df_planning = st.session_state['df_planning_drive']
+dataframes = {}
+
+# Chargement automatique du planning depuis Google Drive
+if os.path.exists(planning_filepath) and not st.session_state.get('planning_charge', False):
+    try:
+        df_planning = pd.read_csv(
+            planning_filepath,
+            encoding='utf-8',
+            sep=';',              # attention au séparateur
+            parse_dates=['Date'],
+            dayfirst=True
+        )
+        df_planning.columns = df_planning.columns.str.strip()  # Nettoyage essentiel des colonnes
+
+        st.session_state['df_planning_drive'] = df_planning
+        st.session_state['planning_charge'] = True
+        st.sidebar.success(f"Planning.csv chargé depuis Google Drive ({planning_filepath})")
+        st.write("Colonnes Planning chargées :", list(df_planning.columns))  # debug facultatif
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de Planning.csv depuis Google Drive : {e}")
+
+# Utilisation de df_planning chargé
+if 'df_planning_drive' in st.session_state:
+    dataframes["Planning"] = st.session_state['df_planning_drive']
+else:
+    st.warning("Veuillez télécharger le planning via le bouton Google Drive.")
+    return
+
     else:
         st.warning("Veuillez télécharger le planning ou uploadez un fichier manuellement si besoin.")
         # Facultatif : Pour uploader manuellement en dernier recours
