@@ -539,8 +539,8 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
-            self.df_planning.dropna(subset=['Date'], inplace=True)
+            df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
+            df_planning = df_planning.dropna(subset=['Date'])
         else:
             logger.error("'Date' manquante dans le planning.")
             raise ValueError("Colonne 'Date' manquante dans le fichier de planning.")
