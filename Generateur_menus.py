@@ -1229,8 +1229,8 @@ def main():
     st.sidebar.header("Télécharger un fichier depuis Google Drive")
     st.sidebar.info("Utilisez cette section pour télécharger un fichier sur votre appareil, sans le charger dans l'application.")
     
-    # URL par défaut à pré-remplir
-    gdrive_url_par_defaut = "https://docs.google.com/spreadsheets/d/1Xy_J9d3A..." # <-- Remplacez par votre lien
+    # URL par défaut
+    gdrive_url_par_defaut = "https://docs.google.com/spreadsheets/d/1_yI2c7B-Gz..." # <-- Remplacez par votre lien
     
     lien_gdrive_telechargement = st.sidebar.text_input(
         "Collez l'URL de partage Google Drive du fichier CSV :", 
@@ -1240,24 +1240,33 @@ def main():
 
     if lien_gdrive_telechargement:
         try:
-            with st.spinner('Récupération du nom du fichier et préparation du téléchargement...'):
-                # Utilise gdown pour obtenir le nom du fichier depuis le lien
-                filename_gdrive = gdown.get_filename(lien_gdrive_telechargement)
+            with st.spinner('Téléchargement en cours...'):
+                # Étape 1 : Téléchargement du fichier vers un emplacement temporaire
+                # gdown va auto-générer un nom de fichier basé sur le titre de la ressource
+                output_path = gdown.download(lien_gdrive_telechargement, quiet=True, fuzzy=True)
                 
-                # Utilise gdown pour télécharger le contenu du fichier dans un buffer mémoire
-                output = io.BytesIO()
-                gdown.download(lien_gdrive_telechargement, output, quiet=True, fuzzy=True)
+                # S'assurer que le téléchargement a réussi
+                if not output_path or not os.path.exists(output_path):
+                    raise FileNotFoundError("Le fichier n'a pas pu être téléchargé.")
+
+                # Étape 2 : Lecture du fichier en mémoire et obtention de son nom
+                with open(output_path, "rb") as f:
+                    output_bytes = f.read()
+
+                # Récupération du nom du fichier original
+                filename_gdrive = os.path.basename(output_path)
                 
-                # Réinitialiser la position du curseur du buffer pour la lecture
-                output.seek(0)
+                # Étape 3 : Suppression du fichier temporaire
+                os.remove(output_path)
                 
-            st.sidebar.download_button(
-                label="Télécharger le fichier CSV",
-                data=output,
-                file_name=filename_gdrive,  # <-- Le nom du fichier est maintenant dynamique
-                mime="text/csv"
-            )
-            
+                # Étape 4 : Utilisation du bouton de téléchargement Streamlit
+                st.sidebar.download_button(
+                    label="Télécharger le fichier CSV",
+                    data=output_bytes,
+                    file_name=filename_gdrive,  # Le nom du fichier est maintenant correct
+                    mime="text/csv"
+                )
+                
         except Exception as e:
             st.sidebar.error(f"Erreur lors de la préparation du fichier : {e}")
     
