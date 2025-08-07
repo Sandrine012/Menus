@@ -1225,35 +1225,39 @@ def main():
 
     st.sidebar.header("Fichiers de données")
     
-  # ────── FONCTIONNALITÉ DE TÉLÉCHARGEMENT DIRECT ──────────────────
+ # ────── FONCTIONNALITÉ DE TÉLÉCHARGEMENT DIRECT ──────────────────
     st.sidebar.header("Télécharger un fichier depuis Google Drive")
     st.sidebar.info("Utilisez cette section pour télécharger un fichier sur votre appareil, sans le charger dans l'application.")
     
-    # Remplacez "URL_PAR_DEFAUT" par le lien de votre fichier Google Drive.
+    # URL par défaut à pré-remplir
+    gdrive_url_par_defaut = "https://docs.google.com/spreadsheets/d/1Xy_J9d3A..." # <-- Remplacez par votre lien
+    
     lien_gdrive_telechargement = st.sidebar.text_input(
         "Collez l'URL de partage Google Drive du fichier CSV :", 
-        value="https://drive.google.com/file/d/1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8/view", # <-- Ajoutez votre URL ici
+        value=gdrive_url_par_defaut,
         key="telechargement_url"
     )
 
     if lien_gdrive_telechargement:
         try:
-            with st.spinner('Préparation du téléchargement...'):
-                # Utilisation de gdown pour télécharger le contenu du fichier
-                # et le placer dans un buffer mémoire
+            with st.spinner('Récupération du nom du fichier et préparation du téléchargement...'):
+                # Utilise gdown pour obtenir le nom du fichier depuis le lien
+                filename_gdrive = gdown.get_filename(lien_gdrive_telechargement)
+                
+                # Utilise gdown pour télécharger le contenu du fichier dans un buffer mémoire
                 output = io.BytesIO()
                 gdown.download(lien_gdrive_telechargement, output, quiet=True, fuzzy=True)
                 
                 # Réinitialiser la position du curseur du buffer pour la lecture
                 output.seek(0)
-
-                st.sidebar.download_button(
-                    label="Télécharger le fichier CSV",
-                    data=output,
-                    file_name="Planning.csv",
-                    mime="text/csv"
-                )
                 
+            st.sidebar.download_button(
+                label="Télécharger le fichier CSV",
+                data=output,
+                file_name=filename_gdrive,  # <-- Le nom du fichier est maintenant dynamique
+                mime="text/csv"
+            )
+            
         except Exception as e:
             st.sidebar.error(f"Erreur lors de la préparation du fichier : {e}")
     
