@@ -1225,6 +1225,31 @@ def main():
 
     st.sidebar.header("Fichiers de données")
     
+    # ────── FONCTIONNALITÉ DE TÉLÉCHARGEMENT DIRECT ──────────────────
+    st.sidebar.header("Télécharger un fichier depuis Google Drive")
+    st.sidebar.info("Utilisez cette section pour télécharger un fichier sur votre appareil, sans le charger dans l'application.")
+    lien_gdrive_telechargement = st.sidebar.text_input("Collez l'URL de partage Google Drive du fichier CSV :", key="telechargement_url")
+
+    if lien_gdrive_telechargement:
+        try:
+            with st.spinner('Préparation du téléchargement...'):
+                # Utilisation de gdown pour télécharger le contenu du fichier
+                # et le placer dans un buffer mémoire
+                output = io.BytesIO()
+                gdown.download(lien_gdrive_telechargement, output, quiet=True, fuzzy=True)
+                
+                # Réinitialiser la position du curseur du buffer pour la lecture
+                output.seek(0)
+
+                st.sidebar.download_button(
+                    label="Télécharger le fichier CSV",
+                    data=output,
+                    file_name="fichier_gdrive.csv",
+                    mime="text/csv"
+                )
+                
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors de la préparation du fichier : {e}")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
