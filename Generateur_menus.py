@@ -1222,19 +1222,7 @@ def main():
         )
 
     st.sidebar.header("Fichiers de données")
-
-    from google.colab import drive
-
-    # Monter Google Drive pour l'accès aux fichiers
-    drive.mount('/content/gdrive')
     
-    # Définir le chemin d'accès au fichier sur votre Google Drive
-    chemin_planning = '/content/gdrive/MyDrive/Fichier test/Planning.csv'
-    
-    # Charger le fichier CSV dans un DataFrame Pandas
-    df_planning = pd.read_csv(chemin_planning)
-    
-    st.write("Fichier planning.csv chargé avec succès depuis Google Drive.")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
