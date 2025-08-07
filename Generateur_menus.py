@@ -1053,18 +1053,22 @@ def add_menu_to_notion(df_menu, notion_db_id):
         nom_plat = row.get(COLONNE_NOM)
         participants = row.get('Participant(s)')
         date_str = row.get('Date')
-
+        
         if not date_str:
             st.warning(f"Date invalide pour la ligne : {nom_plat}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
-            
+        
         try:
-            date_notion = datetime.strptime(date_str.split(' ')[0], '%Y-%m-%d').date().isoformat()
+            # Ici on parse date_str complet avec datetime, en considérant qu'il contient heure (ex: '2025-08-07 08:00')
+            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M')
+            # On convertit en isoformat complet
+            date_notion = dt.isoformat()  # Ex: '2025-08-07T08:00:00'
         except ValueError:
             st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
+
         
         # Le dictionnaire des propriétés de la page
         new_page_properties = {
