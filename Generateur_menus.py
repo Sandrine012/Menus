@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import random
 import logging
+import gdown
+import tempfile
+import os
 from datetime import datetime, timedelta
 import time, httpx
 from notion_client import Client
@@ -1158,6 +1161,8 @@ def load_notion_data(saison_filtre_selection):
     }
 
 def main():
+    dataframes = {}
+
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
@@ -1220,37 +1225,86 @@ def main():
             index=index_saison_defaut,
             key="saison_filtre"
         )
-
+    
+    
     st.sidebar.header("Fichiers de données")
     
+    # Remplacez VOTRE_FILE_ID_ICI par l’ID réel de votre fichier Google Drive
+    GOOGLE_DRIVE_FILE_ID = "1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8"
+    GOOGLE_DRIVE_URL = f"https://drive.google.com/uc?id={GOOGLE_DRIVE_FILE_ID}"
     
-    uploaded_files = {}
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
-    )
+    # Fichier temporaire local vers lequel sera téléchargé planning.csv
+    temp_dir = tempfile.gettempdir()
+    planning_filepath = os.path.join(temp_dir, "planning.csv")
+    
+    # Bouton de téléchargement depuis Google Drive
+    if st.sidebar.button("📥 Télécharger Planning.csv depuis Google Drive"):
+        with st.spinner("Téléchargement en cours..."):
+            try:
+                gdown.download(GOOGLE_DRIVE_URL, planning_filepath, quiet=False)
+                st.sidebar.success("Planning.csv téléchargé depuis Google Drive avec succès !")
+                # Force reload du planning
+                st.session_state['planning_charge'] = False
+            except Exception as e:
+                st.sidebar.error(f"Erreur lors du téléchargement : {e}")
+    
+    # Chargement automatique du fichier planning.csv si présent localement
+dataframes = {}
 
-    if uploaded_files["Planning.csv"] is None:
-        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
-        return
-
-    dataframes = {}
-
+# Chargement automatique du planning depuis Google Drive
+if os.path.exists(planning_filepath) and not st.session_state.get('planning_charge', False):
     try:
-        uploaded_files["Planning.csv"].seek(0)
         df_planning = pd.read_csv(
-            uploaded_files["Planning.csv"],
+            planning_filepath,
             encoding='utf-8',
-            sep=';',
+            sep=';',              # attention au séparateur
             parse_dates=['Date'],
             dayfirst=True
         )
-        dataframes["Planning"] = df_planning
-        st.sidebar.success("Planning.csv chargé avec succès.")
+        df_planning.columns = df_planning.columns.str.strip()  # Nettoyage essentiel des colonnes
+
+        st.session_state['df_planning_drive'] = df_planning
+        st.session_state['planning_charge'] = True
+        st.sidebar.success(f"Planning.csv chargé depuis Google Drive ({planning_filepath})")
+        st.write("Colonnes Planning chargées :", list(df_planning.columns))  # debug facultatif
     except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
-        return
+        st.sidebar.error(f"Erreur lors du chargement de Planning.csv depuis Google Drive : {e}")
+
+# Utilisation de df_planning chargé
+if 'df_planning_drive' in st.session_state:
+    dataframes["Planning"] = st.session_state['df_planning_drive']
+else:
+    st.warning("Veuillez télécharger le planning via le bouton Google Drive.")
+
+    # Facultatif : uploader manuellement en dernier recours
+    uploaded_file = st.sidebar.file_uploader("Ou uploadez Planning.csv manuellement", type="csv")
+    if uploaded_file is not None:
+        try:
+            df_planning = pd.read_csv(
+                uploaded_file,
+                encoding='utf-8',
+                sep=';',
+                parse_dates=['Date'],
+                dayfirst=True
+            )
+            st.session_state['df_planning_drive'] = df_planning
+            dataframes["Planning"] = df_planning  # Pensez à mettre à jour aussi ici
+            st.session_state['planning_charge'] = True
+            st.sidebar.success("Planning.csv chargé manuellement.")
+        except Exception as e:
+            st.sidebar.error(f"Erreur lors du chargement manuel : {e}")
+    else:
+        # Ici vous pouvez éventuellement mettre d'autres messages ou actions si pas d'upload
+        st.info("Aucun fichier uploadé manuellement.")
+
+
+        
+    dataframes = {}
+    dataframes["Planning"] = df_planning
+    st.sidebar.success("Planning.csv chargé avec succès.")
+except Exception as e:
+    st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+    return
 
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
