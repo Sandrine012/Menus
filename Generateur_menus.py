@@ -539,8 +539,8 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
-            df_planning = df_planning.dropna(subset=['Date'])
+            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
+            self.df_planning.dropna(subset=['Date'], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
             raise ValueError("Colonne 'Date' manquante dans le fichier de planning.")
@@ -1246,29 +1246,11 @@ def main():
             parse_dates=['Date'],
             dayfirst=True
         )
-    
-        # Nettoyage des colonnes (espaces)
-        df_planning.columns = df_planning.columns.str.strip()
-    
-        # Conversion explicite et stricte en datetime
-        df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
-    
-        # Debug : affichage type et valeurs nulles
-        st.write("Type colonne 'Date' :", df_planning['Date'].dtype)
-        st.write("Nombres de valeurs NaT dans 'Date' :", df_planning['Date'].isna().sum())
-    
-        # Supprimer lignes où date invalide
-        if df_planning['Date'].isna().any():
-            st.warning("⚠️ Certaines dates dans Planning.csv sont invalides et ont été supprimées.")
-            df_planning = df_planning.dropna(subset=['Date'])
-    
         dataframes["Planning"] = df_planning
         st.sidebar.success("Planning.csv chargé avec succès.")
     except Exception as e:
         st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
-
-
 
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
