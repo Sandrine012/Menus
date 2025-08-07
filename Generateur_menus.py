@@ -1298,12 +1298,13 @@ else:
         st.info("Aucun fichier uploadé manuellement.")
 
 
-        dataframes = {}
-        dataframes["Planning"] = df_planning
-        st.sidebar.success("Planning.csv chargé avec succès.")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
-        return
+        
+    dataframes = {}
+    dataframes["Planning"] = df_planning
+    st.sidebar.success("Planning.csv chargé avec succès.")
+except Exception as e:
+    st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+    return
 
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
