@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import random
 import logging
-import requests
-import io
 from datetime import datetime, timedelta
 import time, httpx
 from notion_client import Client
@@ -1159,20 +1157,6 @@ def load_notion_data(saison_filtre_selection):
         "Ingredients_recettes": df_ingredients_recettes
     }
 
-def load_planning_from_google_drive(file_id):
-    url = f'https://drive.google.com/uc?id={file_id}&export=download'
-    try:
-        response = requests.get(url)
-        response.raise_for_status()  # Lève une exception pour les erreurs HTTP
-        data = io.StringIO(response.text)
-        return pd.read_csv(data)
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erreur de téléchargement du fichier Google Drive: {e}")
-        return None
-    except Exception as e:
-        st.error(f"Erreur lors du traitement du fichier CSV: {e}")
-        return None
-        
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
@@ -1240,11 +1224,32 @@ def main():
     st.sidebar.header("Fichiers de données")
     
     
-    file_id = "1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8"
-    df_planning = load_planning_from_google_drive(file_id)
-    
-    if df_planning is None:
-        st.warning("Impossible de continuer sans le fichier de planning.")
+    uploaded_files = {}
+    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
+        "Uploader Planning.csv (votre planning de repas)", 
+        type="csv", 
+        key="Planning.csv"
+    )
+
+    if uploaded_files["Planning.csv"] is None:
+        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
+        return
+
+    dataframes = {}
+
+    try:
+        uploaded_files["Planning.csv"].seek(0)
+        df_planning = pd.read_csv(
+            uploaded_files["Planning.csv"],
+            encoding='utf-8',
+            sep=';',
+            parse_dates=['Date'],
+            dayfirst=True
+        )
+        dataframes["Planning"] = df_planning
+        st.sidebar.success("Planning.csv chargé avec succès.")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
         return
 
     if 'generation_reussie' not in st.session_state:
