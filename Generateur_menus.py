@@ -1251,23 +1251,12 @@ def main():
                 st.sidebar.download_button(
                     label="Télécharger le fichier CSV",
                     data=output,
-                    file_name="Planning.csv",
+                    file_name="fichier_gdrive.csv",
                     mime="text/csv"
                 )
                 
         except Exception as e:
             st.sidebar.error(f"Erreur lors de la préparation du fichier : {e}")
-    
-    uploaded_files = {}
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
-    )
-
-    if uploaded_files["Planning.csv"] is None:
-        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
-        return
 
     dataframes = {}
 
