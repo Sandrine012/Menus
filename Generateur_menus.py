@@ -1240,12 +1240,16 @@ def main():
     st.sidebar.header("Fichiers de données")
     
     
+    dataframes = {}
+
     file_id = "1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8"
     df_planning = load_planning_from_google_drive(file_id)
-    
+
     if df_planning is None:
         st.warning("Impossible de continuer sans le fichier de planning.")
         return
+        
+    dataframes["Planning"] = df_planning
 
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
