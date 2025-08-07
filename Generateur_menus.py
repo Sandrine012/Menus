@@ -539,7 +539,7 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            self.df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
+            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
             self.df_planning.dropna(subset=['Date'], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
@@ -1158,36 +1158,13 @@ def load_notion_data(saison_filtre_selection):
     }
 
 def main():
-    import streamlit as st
-    import pandas as pd
-    import gdown
-    import tempfile
-    import os
-    from datetime import datetime
-    # Importez ici vos fonctions spécifiques : MenuGenerator, add_menu_to_notion, get_current_season, load_notion_data, verifier_colonnes, etc.
-
-    # Constantes (à ajuster si nécessaire)
-    NB_JOURS_ANTI_REPETITION_DEFAULT = 42
-    REPAS_EQUILIBRE_DEFAULT = 700
-    TEMPS_MAX_EXPRESS_DEFAULT = 20
-    TEMPS_MAX_RAPIDE_DEFAULT = 30
-
-    COLONNE_NOM = "Nom"
-    COLONNE_TEMPS_TOTAL = "Temps_total"
-    COLONNE_ID_RECETTE = "Page_ID"
-    COLONNE_AIME_PAS_PRINCIP = "Aime_pas_princip"
-    COLONNE_ID_INGREDIENT = "Page_ID"
-    ID_MENUS = "votre_id_notion_menus"  # Remplacez par votre ID Notion menu
-
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
-
-    # Initialisation unique du dictionnaire de DataFrames
-    dataframes = {}
-
-    # Sidebar paramètres génération
+    
+    # --- Paramètres de génération (section dépliante) ---
     with st.sidebar.expander("⚙️ Paramètres de génération"):
+        # Initialisation des valeurs par défaut
         if 'NB_JOURS_ANTI_REPETITION' not in st.session_state:
             st.session_state['NB_JOURS_ANTI_REPETITION'] = NB_JOURS_ANTI_REPETITION_DEFAULT
         if 'REPAS_EQUILIBRE' not in st.session_state:
@@ -1197,30 +1174,35 @@ def main():
         if 'TEMPS_MAX_RAPIDE' not in st.session_state:
             st.session_state['TEMPS_MAX_RAPIDE'] = TEMPS_MAX_RAPIDE_DEFAULT
 
+        # Inputs pour les paramètres
         st.session_state['NB_JOURS_ANTI_REPETITION'] = st.number_input(
-            "Délai entre menus identiques (jours)",
-            min_value=1, max_value=365,
+            "Délai entre menus identiques (jours)", 
+            min_value=1, 
+            max_value=365, 
             value=st.session_state['NB_JOURS_ANTI_REPETITION'],
             key="input_jours_anti_repetition"
         )
         st.session_state['REPAS_EQUILIBRE'] = st.number_input(
-            "Calories max pour repas 'équilibré'",
-            min_value=100, max_value=2000,
-            step=50,
+            "Calories max pour repas 'équilibré'", 
+            min_value=100, 
+            max_value=2000, 
+            step=50, 
             value=st.session_state['REPAS_EQUILIBRE'],
             key="input_repas_equilibre"
         )
         st.session_state['TEMPS_MAX_EXPRESS'] = st.number_input(
-            "Temps max pour repas 'express' (min)",
-            min_value=5, max_value=60,
-            step=5,
+            "Temps max pour repas 'express' (min)", 
+            min_value=5, 
+            max_value=60, 
+            step=5, 
             value=st.session_state['TEMPS_MAX_EXPRESS'],
             key="input_temps_express"
         )
         st.session_state['TEMPS_MAX_RAPIDE'] = st.number_input(
-            "Temps max pour repas 'rapide' (min)",
-            min_value=5, max_value=90,
-            step=5,
+            "Temps max pour repas 'rapide' (min)", 
+            min_value=5, 
+            max_value=90, 
+            step=5, 
             value=st.session_state['TEMPS_MAX_RAPIDE'],
             key="input_temps_rapide"
         )
@@ -1231,7 +1213,7 @@ def main():
             index_saison_defaut = saisons_disponibles.index(saison_actuelle)
         except ValueError:
             index_saison_defaut = 0
-
+            
         saison_selectionnee = st.selectbox(
             "Sélectionnez la saison:",
             options=saisons_disponibles,
@@ -1239,107 +1221,37 @@ def main():
             key="saison_filtre"
         )
 
-    # => Gestion téléchargement planning.csv depuis Google Drive
     st.sidebar.header("Fichiers de données")
+    
+    
+    uploaded_files = {}
+    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
+        "Uploader Planning.csv (votre planning de repas)", 
+        type="csv", 
+        key="Planning.csv"
+    )
 
-    GOOGLE_DRIVE_FILE_ID = "1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8"  # Remplacez par votre ID exact
-    GOOGLE_DRIVE_URL = f"https://drive.google.com/uc?id={GOOGLE_DRIVE_FILE_ID}"
-
-    temp_dir = tempfile.gettempdir()
-    planning_filepath = os.path.join(temp_dir, "planning.csv")
-
-    if st.sidebar.button("📥 Télécharger Planning.csv depuis Google Drive"):
-        with st.spinner("Téléchargement en cours..."):
-            try:
-                gdown.download(GOOGLE_DRIVE_URL, planning_filepath, quiet=False)
-                st.sidebar.success("Planning.csv téléchargé depuis Google Drive avec succès !")
-                st.session_state['planning_charge'] = False  # Forcer rechargement
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du téléchargement : {e}")
-
-    # Chargement automatique du planning.csv
-    if os.path.exists(planning_filepath) and not st.session_state.get('planning_charge', False):
-        try:
-            df_planning = pd.read_csv(
-                planning_filepath,
-                sep=';',
-                encoding='utf-8',
-                parse_dates=['Date'],
-                dayfirst=True
-            )
-            df_planning.columns = df_planning.columns.str.strip()
-            # Conversion stricte et nettoyage des dates invalides
-            df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
-            # Message et suppression si dates invalides
-            if df_planning['Date'].isna().any():
-                st.warning("Certaines dates dans Planning.csv sont invalides et ont été supprimées.")
-                df_planning = df_planning.dropna(subset=['Date'])
-
-            st.session_state['df_planning_drive'] = df_planning
-            st.session_state['planning_charge'] = True
-            st.sidebar.success(f"Planning.csv chargé depuis Google Drive ({planning_filepath})")
-            st.write("Colonnes Planning chargées :", list(df_planning.columns))
-        except Exception as e:
-            st.sidebar.error(f"Erreur lors du chargement de Planning.csv : {e}")
-
-    # Upload manuel en dernier recours
-    if 'df_planning_drive' not in st.session_state:
-        uploaded_file = st.sidebar.file_uploader("Ou uploadez Planning.csv manuellement", type="csv")
-        if uploaded_file is not None:
-            try:
-                df_planning = pd.read_csv(
-                    uploaded_file,
-                    sep=';',
-                    encoding='utf-8',
-                    parse_dates=['Date'],
-                    dayfirst=True
-                )
-                df_planning.columns = df_planning.columns.str.strip()
-                df_planning['Date'] = pd.to_datetime(df_planning['Date'], format="%d/%m/%Y %H:%M", errors='coerce')
-                if df_planning['Date'].isna().any():
-                    st.warning("Certaines dates dans le fichier uploadé sont invalides et ont été supprimées.")
-                    df_planning = df_planning.dropna(subset=['Date'])
-                st.session_state['df_planning_drive'] = df_planning
-                st.session_state['planning_charge'] = True
-                st.sidebar.success("Planning.csv chargé manuellement.")
-            except Exception as e:
-                st.sidebar.error(f"Erreur lors du chargement manuel : {e}")
-
-    # Vérification planning chargé
-    if 'df_planning_drive' in st.session_state:
-        dataframes["Planning"] = st.session_state['df_planning_drive']
-    else:
-        st.warning("Veuillez fournir un fichier Planning.csv via téléchargement ou upload.")
-        return  # arrêt faute de planning
-
-    # Chargement des autres données Notion
-    with st.spinner("Chargement des données Notion..."):
-        try:
-            notion_data = load_notion_data(saison_selectionnee)
-            dataframes.update(notion_data)
-        except Exception as e:
-            st.error(f"Erreur lors du chargement des données Notion : {e}")
-            return
-
-    # Vérifications colonnes critiques
-    try:
-        verifier_colonnes(dataframes["Recettes"],
-                         [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP,
-                          "Transportable", "Calories", "Proteines"],
-                         "Recettes")
-        verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
-        verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
-        verifier_colonnes(dataframes["Ingredients"],
-                         [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"],
-                         "Ingredients")
-        verifier_colonnes(dataframes["Ingredients_recettes"],
-                         [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"],
-                         "Ingredients_recettes")
-    except ValueError as ve:
-        st.error(f"Erreur de données : {ve}")
+    if uploaded_files["Planning.csv"] is None:
+        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
         return
 
-    # Etats initiaux pour résultats dans session state
+    dataframes = {}
+
+    try:
+        uploaded_files["Planning.csv"].seek(0)
+        df_planning = pd.read_csv(
+            uploaded_files["Planning.csv"],
+            encoding='utf-8',
+            sep=';',
+            parse_dates=['Date'],
+            dayfirst=True
+        )
+        dataframes["Planning"] = df_planning
+        st.sidebar.success("Planning.csv chargé avec succès.")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+        return
+
     if 'generation_reussie' not in st.session_state:
         st.session_state['generation_reussie'] = False
     if 'df_menu_realiste' not in st.session_state:
@@ -1352,102 +1264,236 @@ def main():
         st.session_state['liste_courses_alternatif'] = []
 
     st.markdown("---")
-    st.header("1. Générer et Envoyer le Menu Optimal (1 clic)")
-    st.write("Ce bouton charge les données, génère le menu Optimal, l'envoie à Notion, et génère aussi un menu alternatif.")
-
+    st.header("1. Générer et Exporter en 1 clic")
+    st.write("Ce bouton charge les données, génère le menu Optimal et l'envoie à Notion. Il génère aussi un menu alternatif.")
+    
     if st.button("🚀 Générer et Envoyer le Menu Optimal (1 clic)", use_container_width=True):
         st.session_state['generation_reussie'] = False
-        try:
-            params = {
-                "NB_JOURS_ANTI_REPETITION": st.session_state['NB_JOURS_ANTI_REPETITION'],
-                "REPAS_EQUILIBRE": st.session_state['REPAS_EQUILIBRE'],
-                "TEMPS_MAX_EXPRESS": st.session_state['TEMPS_MAX_EXPRESS'],
-                "TEMPS_MAX_RAPIDE": st.session_state['TEMPS_MAX_RAPIDE']
-            }
+        
+        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
 
-            menu_generator_realiste = MenuGenerator(
-                dataframes["Menus"], dataframes["Recettes"], dataframes["Planning"],
-                dataframes["Ingredients"], dataframes["Ingredients_recettes"],
-                ne_pas_decrementer_stock=False, params=params
-            )
-            df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
-            st.session_state['df_menu_realiste'] = df_menu_realiste
-            st.session_state['liste_courses_realiste'] = liste_courses_realiste
+        with st.spinner("Chargement des données Notion..."):
+            try:
+                notion_data = load_notion_data(saison_selectionnee)
+                dataframes.update(notion_data)
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
+                return
+        
+        with st.spinner("Vérification des colonnes..."):
+            try:
+                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
+                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
+                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
+            except ValueError as ve:
+                st.error(f"Erreur de données : {ve}")
+                return
 
-            recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
+        with st.spinner("Génération du menu Optimal et alternatif..."):
+            try:
+                params = {
+                    "NB_JOURS_ANTI_REPETITION": st.session_state['NB_JOURS_ANTI_REPETITION'],
+                    "REPAS_EQUILIBRE": st.session_state['REPAS_EQUILIBRE'],
+                    "TEMPS_MAX_EXPRESS": st.session_state['TEMPS_MAX_EXPRESS'],
+                    "TEMPS_MAX_RAPIDE": st.session_state['TEMPS_MAX_RAPIDE']
+                }
 
-            menu_generator_alternatif = MenuGenerator(
-                dataframes["Menus"], dataframes["Recettes"], dataframes["Planning"],
-                dataframes["Ingredients"], dataframes["Ingredients_recettes"],
-                ne_pas_decrementer_stock=True, params=params
-            )
-            df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(
-                mode='alternatif', exclure_recettes_ids=recettes_a_exclure
-            )
-            st.session_state['df_menu_alternatif'] = df_menu_alternatif
-            st.session_state['liste_courses_alternatif'] = liste_courses_alternatif
+                menu_generator_realiste = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=False,
+                    params=params
+                )
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
+                st.session_state['df_menu_realiste'] = df_menu_realiste
+                st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
-            success, failure = add_menu_to_notion(df_menu_realiste, ID_MENUS)
+                recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
+
+                menu_generator_alternatif = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=True,
+                    params=params
+                )
+                df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
+                st.session_state['df_menu_alternatif'] = df_menu_alternatif
+                st.session_state['liste_courses_alternatif'] = liste_courses_alternatif
+                
+            except Exception as e:
+                st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
+                return
+
+        with st.spinner("Envoi du menu à Notion..."):
+            success, failure = add_menu_to_notion(st.session_state['df_menu_realiste'], ID_MENUS)
             if success > 0:
-                st.success(f"✅ {success} repas ajoutés à Notion avec succès.")
+                st.success(f"✅ Opération '1 clic' réussie ! {success} repas ont été ajoutés à votre base de données Notion 'Menus' !")
             if failure > 0:
-                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés.")
+                st.warning(f"⚠️ {failure} repas n'ont pas pu être ajoutés (voir les logs pour plus de détails).")
             if success == 0 and failure == 0:
                 st.info("Aucun repas valide à ajouter.")
-            st.session_state['generation_reussie'] = True
 
-        except Exception as e:
-            st.error(f"Erreur lors de la génération ou de l'envoi : {e}")
+        st.session_state['generation_reussie'] = True
 
-    # Affichage des menus et listes si générés
+    st.markdown("---")
+    st.header("2. Générer les Menus")
+    st.write("Cliquez sur le bouton ci-dessous pour générer les deux versions du menu hebdomadaire et leurs listes de courses.")
+    
+    if st.button("🚀 Générer 2 Menus (Optimal & Alternatif)"):
+        st.session_state['generation_reussie'] = False
+        
+        saison_selectionnee = st.session_state.get("saison_filtre", get_current_season())
+
+        with st.spinner("Chargement des données Notion..."):
+            try:
+                notion_data = load_notion_data(saison_selectionnee)
+                dataframes.update(notion_data)
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
+                return
+
+        with st.spinner("Vérification des colonnes..."):
+            try:
+                verifier_colonnes(dataframes["Recettes"], [COLONNE_ID_RECETTE, COLONNE_NOM, COLONNE_TEMPS_TOTAL, COLONNE_AIME_PAS_PRINCIP, "Transportable", "Calories", "Proteines"], "Recettes")
+                verifier_colonnes(dataframes["Planning"], ["Date", "Participants", "Transportable", "Temps", "Nutrition"], "Planning.csv")
+                verifier_colonnes(dataframes["Menus"], ["Date", "Recette"], "Menus")
+                verifier_colonnes(dataframes["Ingredients"], [COLONNE_ID_INGREDIENT, "Nom", "Qte reste", "unité", "Intervalle"], "Ingredients")
+                verifier_colonnes(dataframes["Ingredients_recettes"], [COLONNE_ID_RECETTE, "Ingrédient ok", "Qté/pers_s"], "Ingredients_recettes")
+            except ValueError as ve:
+                st.error(f"Erreur de données : {ve}")
+                return
+
+        with st.spinner("Génération des deux menus en cours..."):
+            try:
+                params = {
+                    "NB_JOURS_ANTI_REPETITION": st.session_state['NB_JOURS_ANTI_REPETITION'],
+                    "REPAS_EQUILIBRE": st.session_state['REPAS_EQUILIBRE'],
+                    "TEMPS_MAX_EXPRESS": st.session_state['TEMPS_MAX_EXPRESS'],
+                    "TEMPS_MAX_RAPIDE": st.session_state['TEMPS_MAX_RAPIDE']
+                }
+
+                menu_generator_realiste = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=False,
+                    params=params
+                )
+                df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
+                st.session_state['df_menu_realiste'] = df_menu_realiste
+                st.session_state['liste_courses_realiste'] = liste_courses_realiste
+
+                recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
+
+                menu_generator_alternatif = MenuGenerator(
+                    dataframes["Menus"],
+                    dataframes["Recettes"],
+                    dataframes["Planning"],
+                    dataframes["Ingredients"],
+                    dataframes["Ingredients_recettes"],
+                    ne_pas_decrementer_stock=True,
+                    params=params
+                )
+                df_menu_alternatif, liste_courses_alternatif = menu_generator_alternatif.generer_menu(mode='alternatif', exclure_recettes_ids=recettes_a_exclure)
+                st.session_state['df_menu_alternatif'] = df_menu_alternatif
+                st.session_state['liste_courses_alternatif'] = liste_courses_alternatif
+                
+            except Exception as e:
+                st.error(f"Une erreur est survenue lors de la génération du menu : {e}")
+                return
+
+        st.session_state['generation_reussie'] = True
+
+
+    # --- Affichage des résultats ---
     if st.session_state.get('generation_reussie'):
         st.header("Menus et Listes de Courses générés")
-
-        tab_optimal, tab_alternatif = st.tabs(["Menu Optimal", "Menu Alternatif"])
-
+        
+        tab_optimal, tab_alternatif = st.tabs(["Menu Optimal (avec stock)", "Menu Alternatif"])
+        
         with tab_optimal:
             st.subheader("Menu Optimal")
-            df_menu_opt = st.session_state.get('df_menu_realiste', pd.DataFrame())
-            if not df_menu_opt.empty:
-                df_menu_opt_display = df_menu_opt.drop(columns=['Recette_ID'], errors='ignore')
-                st.dataframe(df_menu_opt_display, use_container_width=True)
-                csv_opt = df_menu_opt.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button("📥 Télécharger menu OPTIMAL CSV", csv_opt, file_name="menu_optimal.csv", mime="text/csv")
-            else:
-                st.info("Menu optimal non disponible.")
+            st.write("Ce menu a été généré en tenant compte de votre stock pour minimiser le nombre d'ingrédients à acheter.")
+            df_menu_optimal = st.session_state['df_menu_realiste']
+            df_menu_optimal_display = df_menu_optimal.drop(columns=['Recette_ID'])
+            st.dataframe(df_menu_optimal_display, use_container_width=True)
 
-            liste_courses_opt = st.session_state.get('liste_courses_realiste', [])
-            if liste_courses_opt:
-                df_courses_opt = pd.DataFrame(liste_courses_opt)
-                st.subheader("Liste de Courses - Menu Optimal")
-                st.dataframe(df_courses_opt, use_container_width=True)
-                csv_courses_opt = df_courses_opt.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button("📥 Télécharger liste courses OPTIMALE CSV", csv_courses_opt, file_name="liste_courses_optimale.csv", mime="text/csv")
+            csv_data_optimal = df_menu_optimal.to_csv(index=False, sep=';', encoding='utf-8-sig')
+            st.download_button(
+                label="📥 Télécharger le menu OPTIMAL en CSV",
+                data=csv_data_optimal,
+                file_name="menu_optimal.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+            st.subheader("Liste de Courses Détaillée pour le Menu Optimal")
+            if st.session_state['liste_courses_realiste']:
+                liste_courses_df_optimal = pd.DataFrame(st.session_state['liste_courses_realiste'])
+                st.dataframe(liste_courses_df_optimal, use_container_width=True)
+                csv_optimal = liste_courses_df_optimal.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                st.download_button(
+                    label="Télécharger la liste de courses OPTIMALE (CSV)",
+                    data=csv_optimal,
+                    file_name="liste_courses_optimale.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
             else:
-                st.info("Aucun ingrédient manquant pour la liste de courses optimale.")
+                st.info("Aucun ingrédient manquant identifié pour la liste de courses optimale.")
 
         with tab_alternatif:
             st.subheader("Menu Alternatif")
-            df_menu_alt = st.session_state.get('df_menu_alternatif', pd.DataFrame())
-            if not df_menu_alt.empty:
-                df_menu_alt_display = df_menu_alt.drop(columns=['Recette_ID'], errors='ignore')
-                st.dataframe(df_menu_alt_display, use_container_width=True)
-                csv_alt = df_menu_alt.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button("📥 Télécharger menu ALTERNATIF CSV", csv_alt, file_name="menu_alternatif.csv", mime="text/csv")
-            else:
-                st.info("Menu alternatif non disponible.")
+            st.write("Ce menu a été généré sans tenir compte de votre stock. Il ne contient aucune recette utilisée dans le menu Optimal.")
+            df_menu_alternatif = st.session_state['df_menu_alternatif']
+            if not df_menu_alternatif.empty:
+                df_menu_alternatif_display = df_menu_alternatif.drop(columns=['Recette_ID'])
+                st.dataframe(df_menu_alternatif_display, use_container_width=True)
 
-            liste_courses_alt = st.session_state.get('liste_courses_alternatif', [])
-            if liste_courses_alt:
-                df_courses_alt = pd.DataFrame(liste_courses_alt)
-                st.subheader("Liste de Courses - Menu Alternatif")
-                st.dataframe(df_courses_alt, use_container_width=True)
-                csv_courses_alt = df_courses_alt.to_csv(index=False, sep=';', encoding='utf-8-sig')
-                st.download_button("📥 Télécharger liste courses ALTERNATIVE CSV", csv_courses_alt, file_name="liste_courses_alternative.csv", mime="text/csv")
+                csv_data_alternatif = df_menu_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 Télécharger le menu ALTERNATIF en CSV",
+                    data=csv_data_alternatif,
+                    file_name="menu_alternatif.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
             else:
-                st.info("Aucun ingrédient manquant pour la liste de courses alternative.")
+                st.info("Le menu alternatif n'a pas pu être généré. Soit il n'y a pas assez de recettes, soit toutes les recettes valides ont déjà été utilisées dans le menu optimal.")
+                st.download_button(
+                    label="📥 Télécharger le menu ALTERNATIF en CSV",
+                    data=";;",
+                    file_name="menu_alternatif.csv",
+                    mime="text/csv",
+                    disabled=True,
+                    use_container_width=True
+                )
+            
+            st.subheader("Liste de Courses Détaillée pour le Menu Alternatif")
+            if 'liste_courses_alternatif' in st.session_state and st.session_state['liste_courses_alternatif']:
+                liste_courses_df_alternatif = pd.DataFrame(st.session_state['liste_courses_alternatif'])
+                st.dataframe(liste_courses_df_alternatif, use_container_width=True)
+                csv_alternatif = liste_courses_df_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                st.download_button(
+                    label="Télécharger la liste de courses ALTERNATIVE (CSV)",
+                    data=csv_alternatif,
+                    file_name="liste_courses_alternatif.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.info("Aucun ingrédient manquant identifié pour la liste de courses alternative.")
 
 
 if __name__ == "__main__":
     main()
-
