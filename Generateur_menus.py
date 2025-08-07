@@ -1251,7 +1251,7 @@ def main():
                 st.sidebar.download_button(
                     label="Télécharger le fichier CSV",
                     data=output,
-                    file_name="fichier_gdrive.csv",
+                    file_name="Planning.csv",
                     mime="text/csv"
                 )
                 
