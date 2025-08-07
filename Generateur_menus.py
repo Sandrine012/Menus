@@ -866,7 +866,6 @@ def main():
     st.title("Générateur de menus Streamlit")
     st.markdown("---")
 
-    # Section de téléchargement de Planning.csv
     file_id = "1nIRFvCVFqbc3Ca8YhSWDajWIG7np06X8"
     df_planning = load_planning_from_google_drive(file_id)
 
@@ -874,18 +873,21 @@ def main():
         st.warning("Impossible de continuer sans le fichier de planning.")
         st.stop()
 
-    # Le reste de votre application Streamlit commence ici
-    # (le code est le même que l'original, mais il faut s'assurer que
-    # les DataFrames sont bien chargés)
-    
-    # 1. Extraction des données de Notion
-    st.info("Extraction des données de Notion...")
+    st.subheader("Préparation des données")
+    st.info("Extraction des recettes de Notion...")
     df_recettes = extract_recettes(get_current_season())
+
+    st.info("Extraction de l'historique des menus de Notion...")
     df_menus_hist = extract_menus()
+
+    st.info("Extraction des ingrédients de Notion...")
     df_ingredients = extract_ingredients()
+
+    st.info("Extraction des liens ingrédients-recettes de Notion...")
     df_ingredients_recettes = extract_ingr_rec()
 
-    st.success("Données Notion extraites avec succès.")
+    st.success("Toutes les données de Notion ont été extraites avec succès.")
+
 
     # 2. Vérification des colonnes
     try:
