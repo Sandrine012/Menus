@@ -577,24 +577,24 @@ class MenuGenerator:
             return set()
 
 
-from datetime import datetime, timedelta
-
-def est_recente(self, recette_id, date_actuelle):
-    # 1. On récupère toutes les dates où la recette a été utilisée
-    dates_recette = self.df_menus_historique.loc[
-        self.df_menus_historique['Recette'] == recette_id, 'Date'
-    ]
+    from datetime import datetime, timedelta
     
-    if dates_recette.empty:
-        return False
-
-    # 2. On définit la fenêtre de non-répétition par rapport à la date du jour
-    aujourdhui = datetime.now().date()
-    start_date = aujourdhui - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-
-    # 3. On vérifie si une des dates de la recette se situe dans la fenêtre
-    # La fenêtre s'étend de 42 jours avant aujourd'hui jusqu'à l'infini (toutes les dates futures)
-    return any(d.date() >= start_date for d in dates_recette)
+    def est_recente(self, recette_id, date_actuelle):
+        # 1. On récupère toutes les dates où la recette a été utilisée
+        dates_recette = self.df_menus_historique.loc[
+            self.df_menus_historique['Recette'] == recette_id, 'Date'
+        ]
+        
+        if dates_recette.empty:
+            return False
+    
+        # 2. On définit la fenêtre de non-répétition par rapport à la date du jour
+        aujourdhui = datetime.now().date()
+        start_date = aujourdhui - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+    
+        # 3. On vérifie si une des dates de la recette se situe dans la fenêtre
+        # La fenêtre s'étend de 42 jours avant aujourd'hui jusqu'à l'infini (toutes les dates futures)
+        return any(d.date() >= start_date for d in dates_recette)
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
