@@ -647,8 +647,9 @@ class MenuGenerator:
     def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None, ingredients_utilises_cette_semaine=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
+        # Le dictionnaire `ingredients_utilises_cette_semaine` est un mapping de {ing_id: date_utilisation}
         if ingredients_utilises_cette_semaine is None:
-            ingredients_utilises_cette_semaine = set()
+            ingredients_utilises_cette_semaine = {}
 
         candidates = []
         anti_gaspi_candidates = []
@@ -666,19 +667,31 @@ class MenuGenerator:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
                 continue
 
-            # NOUVEAU: Ajout de la vérification des doublons par mot-clé
+            # Vérification du mot-clé
             mot_cle_recette = nom_recette_cand.split()[0].lower()
             if mot_cle_recette in self.mots_cles_selectionnes_semaine:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
                 continue
 
-            # NOUVEAU: Ajout de la vérification des ingrédients déjà utilisés dans la semaine en cours
+            # NOUVEAU: Vérification des ingrédients en fonction de leur intervalle
             ingredients_recette_cand = {i.get("Ingrédient ok") for i in self.recette_manager.get_ingredients_for_recipe(recette_id_str_cand) if i.get("Ingrédient ok")}
-            if not ingredients_utilises_cette_semaine.isdisjoint(ingredients_recette_cand):
-                noms_ingredients_communs = [self.recette_manager.obtenir_nom_ingredient_par_id(ing_id) for ing_id in ingredients_utilises_cette_semaine.intersection(ingredients_recette_cand)]
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Contient un ingrédient déjà utilisé cette semaine ({', '.join(noms_ingredients_communs)}).")
+            is_interval_ok = True
+            noms_ingredients_communs = []
+            for ing_id in ingredients_recette_cand:
+                if ing_id in ingredients_utilises_cette_semaine:
+                    date_derniere_utilisation = ingredients_utilises_cette_semaine[ing_id]
+                    jours_ecoules = (date_repas - date_derniere_utilisation).days
+                    
+                    intervalle_jrs_ing = self.recette_manager.get_intervalle_ingredient(ing_id)
+                    
+                    if intervalle_jrs_ing is not None and jours_ecoules < intervalle_jrs_ing:
+                        noms_ingredients_communs.append(self.recette_manager.obtenir_nom_ingredient_par_id(ing_id))
+                        is_interval_ok = False
+                        break
+            
+            if not is_interval_ok:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Contient un ingrédient déjà utilisé trop récemment ({', '.join(noms_ingredients_communs)}).")
                 continue
-
 
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
@@ -712,7 +725,6 @@ class MenuGenerator:
             if self.est_recente(recette_id_str_cand, date_repas):
                 continue
             
-            # Votre appel existant à la fonction de vérification d'intervalle est ici
             if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
                 continue
 
@@ -744,7 +756,7 @@ class MenuGenerator:
             
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
         return candidates_triees[:10], recettes_ingredients_manquants
-    
+
 #-----------------------------------------------------------------------------------------------------------------------------#
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
@@ -761,8 +773,8 @@ class MenuGenerator:
         menu_recent_noms = []
         
         ingredients_menu_cumules = {}
-        # NOUVEAU: Liste des ingrédients déjà utilisés dans le menu en cours de génération
-        ingredients_utilises_cette_semaine = set()
+        # NOUVEAU: Dictionnaire pour suivre les ingrédients déjà utilisés et la date de leur dernière utilisation
+        ingredients_utilises_cette_semaine = {}
         
         if mode == 'alternatif':
             self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
@@ -783,7 +795,7 @@ class MenuGenerator:
             temps_req = str(repas_planning_row.get("Temps", "")).strip().lower()
             nutrition_req = str(repas_planning_row.get("Nutrition", "")).strip().lower()
 
-            # NOUVEAU : Réinitialiser la liste des ingrédients utilisés pour chaque nouvelle semaine
+            # NOUVEAU : Réinitialiser le dictionnaire des ingrédients utilisés pour chaque nouvelle semaine
             if index == 0 or date_repas_dt.isocalendar()[1] != planning_sorted.iloc[index-1]["Date"].isocalendar()[1]:
                 ingredients_utilises_cette_semaine.clear()
             
@@ -801,7 +813,7 @@ class MenuGenerator:
                 if recette_choisie_id:
                     temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
             else:
-                # NOUVEAU : On passe la liste des ingrédients déjà utilisés cette semaine
+                # NOUVEAU : On passe le dictionnaire des ingrédients déjà utilisés cette semaine
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                     menu_recent_noms, transportable_req, temps_req, nutrition_req,
@@ -865,9 +877,10 @@ class MenuGenerator:
                     remarques_repas = "Aucune recette appropriée trouvée selon les critères, même relâchés."
 
             if recette_choisie_id:
-                # NOUVEAU : Ajout des ingrédients de la recette choisie à la liste de la semaine en cours
+                # NOUVEAU : Pour chaque ingrédient de la recette choisie, mettez à jour sa dernière date d'utilisation
                 ingredients_recette_choisie = {i.get("Ingrédient ok") for i in self.recette_manager.get_ingredients_for_recipe(recette_choisie_id) if i.get("Ingrédient ok")}
-                ingredients_utilises_cette_semaine.update(ingredients_recette_choisie)
+                for ing_id in ingredients_recette_choisie:
+                    ingredients_utilises_cette_semaine[ing_id] = date_repas_dt
 
                 ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
                 for ing_id, qte_menu in ingredients_necessaires_ce_repas.items():
