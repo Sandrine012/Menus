@@ -563,7 +563,12 @@ class MenuGenerator:
         self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
         self.params = params
 
+        # Ajout de ces listes pour suivre les recettes et les mots-clés de la semaine
+        self.recettes_selectionnees_semaine = []
+        self.mots_cles_selectionnes_semaine = set() # Utilisation d'un set pour une meilleure performance
+        
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
+        # ... (Cette méthode reste inchangée)
         try:
             df_hist = self.menus_history_manager.df_menus_historique
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
@@ -581,83 +586,64 @@ class MenuGenerator:
         except Exception as e:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
-
     
     def est_recente(self, recette_id, date_actuelle):
-        """
-        Vérifie si une recette a été utilisée récemment ou est déjà planifiée.
-        Considère l'historique des 42 jours précédents ET les menus planifiés pour l'avenir.
-        """
+        # ... (Cette méthode reste inchangée)
         try:
             df_hist = self.menus_history_manager.df_menus_historique
-            
-            # On récupère toutes les dates où la recette a été utilisée
             dates_recette = df_hist[df_hist['Recette'].astype(str) == str(recette_id)]['Date']
-    
             if dates_recette.empty:
                 return False
-    
-            # La fenêtre de non-répétition commence 42 jours avant la date actuelle.
             start_date = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-    
-            # On vérifie si une des dates de la recette se situe dans la fenêtre.
             return any((d >= start_date) for d in dates_recette)
-        
         except Exception as e:
             logger.error(f"Erreur dans la vérification de la fraîcheur de la recette {recette_id}: {e}")
             return False
-    
-
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
+        # ... (Cette méthode reste inchangée)
         try:
             ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
-            
             for ing in ingredients_recette:
                 ing_id_str = str(ing.get("Ingrédient ok"))
                 if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
-
                 intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
                 if intervalle_jours <= 0:
                     continue
-
                 df_hist = self.menus_history_manager.df_menus_historique
                 if df_hist.empty: continue
-
                 df_ir = self.recette_manager.df_ingredients_recettes
                 recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
-                
                 if not recettes_utilisant_ing.empty:
                     recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
-
                     debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
-                    
                     mask_hist = (
                         (df_hist['Date'] >= debut_intervalle) &
                         (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
                     )
-
                     if not df_hist.loc[mask_hist].empty:
                         nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
                         logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
                         return False
-
             return True
         except Exception as e:
             logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
             return True
 
     def compter_participants(self, participants_str_codes):
+        # ... (Cette méthode reste inchangée)
         if not isinstance(participants_str_codes, str): return 1
         if participants_str_codes == "B": return 1
         return len([p for p in participants_str_codes.replace(" ", "").split(",") if p])
 
     def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
+        # ... (Cette méthode reste inchangée)
         return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
     
     def _get_historical_frequency(self, recette_id):
+        # ... (Cette méthode reste inchangée)
         return self.menus_history_manager.recettes_historique_counts.get(recette_id, 0)
-
+    
     def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
@@ -678,7 +664,12 @@ class MenuGenerator:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
                 continue
 
-            # CORRECTION DU COMPORTEMENT : Appliquer le filtre seulement si la contrainte est spécifiée
+            # NOUVEAU: Ajout de la vérification des doublons par mot-clé
+            mot_cle_recette = nom_recette_cand.split()[0].lower()
+            if mot_cle_recette in self.mots_cles_selectionnes_semaine:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
+                continue
+
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
                 continue
@@ -711,6 +702,7 @@ class MenuGenerator:
             if self.est_recente(recette_id_str_cand, date_repas):
                 continue
             
+            # Votre appel existant à la fonction de vérification d'intervalle est ici
             if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
                 continue
 
@@ -730,7 +722,7 @@ class MenuGenerator:
             return [], {}
 
         if exclure_recettes_ids:
-             candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
+            candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
         else:
             candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
             
@@ -739,11 +731,12 @@ class MenuGenerator:
         if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
             logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_triees[0], -1):.2f}).")
             return anti_gaspi_triees[:5], recettes_ingredients_manquants
-        
+            
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
         return candidates_triees[:10], recettes_ingredients_manquants
-
+    
     def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, exclure_recettes_ids=None):
+        # ... (Cette méthode reste inchangée)
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
@@ -820,8 +813,9 @@ class MenuGenerator:
             return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
         logger.debug(f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
         return None, {}
-
+    
     def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
+        # ... (Cette méthode reste inchangée)
         if recette_id_str is not None:
             nom_recette = self.recette_manager.obtenir_nom(recette_id_str)
             adaptee = self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
@@ -831,11 +825,11 @@ class MenuGenerator:
             logger.warning(f"Aucune recette sélectionnée pour {date_repas.strftime('%d/%m/%Y')} - Participants: {participants_str_codes}")
 
     def _ajouter_resultat(self, resultats_liste, date_repas, nom_menu_str, participants_str, remarques_str, temps_prep_int=0, recette_id_str_pour_eval=None):
+        # ... (Cette méthode reste inchangée)
         info_stock_str = ""
         if recette_id_str_pour_eval:
             score_dispo, pourcentage_dispo, _ = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_pour_eval, self.compter_participants(participants_str))
             info_stock_str = f"Stock: {pourcentage_dispo:.0f}% des ingrédients disponibles (score: {score_dispo:.2f})"
-
         remarques_finales = f"{remarques_str} {info_stock_str}".strip()
         resultats_liste.append({
             "Date": date_repas.strftime("%d/%m/%Y %H:%M"),
@@ -847,9 +841,9 @@ class MenuGenerator:
         })
 
     def generer_menu_repas_b(self, date_repas, plats_transportables_semaine_dict, repas_b_utilises_ids_list, menu_recent_noms_list):
+        # ... (Cette méthode reste inchangée)
         candidats_restes_ids = []
         sorted_plats_transportables = sorted(plats_transportables_semaine_dict.items(), key=lambda item: item[0])
-
         logger.debug(f"--- Recherche de restes pour Repas B le {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         if not sorted_plats_transportables:
             logger.debug("Aucun plat transportable disponible dans plats_transportables_semaine_dict.")
@@ -857,9 +851,7 @@ class MenuGenerator:
         for date_plat_orig, plat_id_orig_str in sorted_plats_transportables:
             nom_plat_reste = self.recette_manager.obtenir_nom(plat_id_orig_str)
             jours_ecoules = (date_repas.date() - date_plat_orig.date()).days
-            
             logger.debug(f"Éval reste {nom_plat_reste} (ID: {plat_id_orig_str}) du {date_plat_orig.strftime('%Y-%m-%d')}. Jours écoulés: {jours_ecoules}.")
-
             if not (0 < jours_ecoules <= 2):
                 logger.debug(f"Reste {nom_plat_reste} filtré: Jours écoulés ({jours_ecoules}) hors de la plage (1-2 jours).")
                 continue
@@ -873,25 +865,24 @@ class MenuGenerator:
             if not self.recette_manager.est_transportable(plat_id_orig_str):
                 logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) filtré: La recette d'origine n'est pas marquée comme transportable dans Recettes.csv.")
                 continue
-
             candidats_restes_ids.append(plat_id_orig_str)
             logger.debug(f"Reste {nom_plat_reste} (ID: {plat_id_orig_str}) ajouté aux candidats restes.")
-
-
         if candidats_restes_ids:
             plat_id_choisi_str = candidats_restes_ids[0]
             nom_plat_choisi_str = self.recette_manager.obtenir_nom(plat_id_choisi_str)
             repas_b_utilises_ids_list.append(plat_id_choisi_str)
             logger.info(f"Reste choisi pour Repas B: {nom_plat_choisi_str} (ID: {plat_id_choisi_str}).")
             return f"Restes : {nom_plat_choisi_str}", plat_id_choisi_str, "Reste transportable utilisé"
-
         logger.info("Pas de reste disponible trouvé pour ce Repas B.")
         return "Pas de reste disponible", None, "Aucun reste transportable trouvé"
-
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
+        
+        # Réinitialisation des trackers pour chaque nouvelle génération de menu
+        self.recettes_selectionnees_semaine = []
+        self.mots_cles_selectionnes_semaine = set()
 
         resultats_df_list = []
         repas_b_utilises_ids = []
@@ -989,7 +980,7 @@ class MenuGenerator:
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         if recette_choisie_id:
-                             remarques_repas += "Contraintes de répétition et de spécificité relâchées. "
+                            remarques_repas += "Contraintes de répétition et de spécificité relâchées. "
 
 
                 if recette_choisie_id:
@@ -1001,6 +992,11 @@ class MenuGenerator:
                     remarques_repas = "Aucune recette appropriée trouvée selon les critères, même relâchés."
 
             if recette_choisie_id:
+                # Ajout de la recette à la liste des recettes utilisées et de son mot-clé
+                self.recettes_selectionnees_semaine.append(recette_choisie_id)
+                nom_recette = self.recette_manager.obtenir_nom(recette_choisie_id)
+                self.mots_cles_selectionnes_semaine.add(nom_recette.split()[0].lower())
+
                 ingredients_necessaires_ce_repas = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
                 for ing_id, qte_menu in ingredients_necessaires_ce_repas.items():
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
@@ -1060,6 +1056,7 @@ class MenuGenerator:
 
 # Nouvelle fonction pour envoyer les données à Notion
 def add_menu_to_notion(df_menu, notion_db_id):
+    # ... (Cette méthode reste inchangée)
     success_count = 0
     failure_count = 0
     
@@ -1086,7 +1083,7 @@ def add_menu_to_notion(df_menu, notion_db_id):
             st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
-
+        
         
         # Le dictionnaire des propriétés de la page
         new_page_properties = {
