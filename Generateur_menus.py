@@ -136,7 +136,7 @@ def extract_menus():
                                [r["id"] for r in it.get("relation",[])])
         d=""
         if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
-            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).date()
+            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00"))
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
@@ -515,7 +515,8 @@ class MenusHistoryManager:
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='mixed', errors='coerce').dt.normalize()
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='ISO8601', errors='coerce').dt.normalize()
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors='coerce')
+            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors='coerce')
+            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
             self.df_menus_historique.dropna(subset=["Date"], inplace=True)
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
