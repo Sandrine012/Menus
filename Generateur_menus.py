@@ -524,12 +524,12 @@ class MenusHistoryManager:
         self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
         self.df_menus_historique.dropna(subset=["Date"], inplace=True)
         self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"])
-            if 'Date' in self.df_menus_historique.columns:
-                self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
-                self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
-            else:
-                logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
-                self.recettes_historique_counts = {}
+        if 'Date' in self.df_menus_historique.columns:
+            self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
+            self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
+         else:
+            logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
+            self.recettes_historique_counts = {}
 
     def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
         """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
