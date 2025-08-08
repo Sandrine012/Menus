@@ -516,7 +516,8 @@ class MenusHistoryManager:
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='mixed', errors='coerce').dt.normalize()
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='ISO8601', errors='coerce').dt.normalize()
             #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors='coerce')
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
+            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
+            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='%d/%m/%Y %H:%M', errors='coerce').dt.normalize()
             self.df_menus_historique.dropna(subset=["Date"], inplace=True)
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
