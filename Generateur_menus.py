@@ -576,16 +576,15 @@ class MenuGenerator:
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
                 return False
     
-            # Début = 42 jours avant aujourd'hui
-            debut = datetime.now() - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            # Fin = max() des dates historiques (y compris futur)
-            fin = df_hist['Date'].max()
-    
+            debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            # Plutôt que fin = date_actuelle
+            fin = self.menus_history_manager.df_menus_historique['Date'].max()  # OU max(date_actuelle, max du planning)
             mask = (
                 (df_hist['Recette'].astype(str) == str(recette_page_id_str)) &
                 (df_hist['Date'] > debut) &
                 (df_hist['Date'] <= fin)
             )
+
     
             return not df_hist.loc[mask].empty
         except Exception as e:
