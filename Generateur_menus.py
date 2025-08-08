@@ -576,27 +576,25 @@ class MenuGenerator:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
 
-    def est_recente(self, recette_page_id_str, date_actuelle):
-        try:
-            df_hist = self.menus_history_manager.df_menus_historique
-            if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
-                return False
 
-            debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            fin = date_actuelle
-            mask = (
-                (df_hist['Recette'].astype(str) == str(recette_page_id_str)) &
-                (df_hist['Date'] > debut) &
-                (df_hist['Date'] <= fin)
-            )
-            is_recent = not df_hist.loc[mask].empty
-            if is_recent:
-                logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Est récente (dans les {self.params['NB_JOURS_ANTI_REPETITION']} jours)")
-            return is_recent
+from datetime import datetime, timedelta
 
-        except Exception as e:
-            logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
-            return False
+def est_recente(self, recette_id, date_actuelle):
+    # 1. On récupère toutes les dates où la recette a été utilisée
+    dates_recette = self.df_menus_historique.loc[
+        self.df_menus_historique['Recette'] == recette_id, 'Date'
+    ]
+    
+    if dates_recette.empty:
+        return False
+
+    # 2. On définit la fenêtre de non-répétition par rapport à la date du jour
+    aujourdhui = datetime.now().date()
+    start_date = aujourdhui - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+
+    # 3. On vérifie si une des dates de la recette se situe dans la fenêtre
+    # La fenêtre s'étend de 42 jours avant aujourd'hui jusqu'à l'infini (toutes les dates futures)
+    return any(d.date() >= start_date for d in dates_recette)
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
