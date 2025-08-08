@@ -570,26 +570,30 @@ class MenuGenerator:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
 
-    def est_recente(self, recette_page_id_str, date_actuelle):
+    def est_recente(self, recette_page_id_str, date_debut_menu, date_fin_menu):
         try:
             df_hist = self.menus_history_manager.df_menus_historique
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
                 return False
     
-            debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            # Plutôt que fin = date_actuelle
-            fin = self.menus_history_manager.df_menus_historique['Date'].max()  # OU max(date_actuelle, max du planning)
+            # Nouvelle fenêtre : 42 jours avant le dernier jour du menu planifié, jusqu’à 14 jours après
+            delta_arriere = self.params["NB_JOURS_ANTI_REPETITION"]
+            delta_avant = 14  # ou la durée réelle de ton menu si >14 jours
+    
+            debut = date_fin_menu - timedelta(days=delta_arriere)
+            fin = date_fin_menu + timedelta(days=delta_avant)
+    
             mask = (
                 (df_hist['Recette'].astype(str) == str(recette_page_id_str)) &
                 (df_hist['Date'] > debut) &
                 (df_hist['Date'] <= fin)
             )
-
     
             return not df_hist.loc[mask].empty
         except Exception as e:
-            logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
+            logger.error(f"Erreur est_recente pour {recette_page_id_str}: {e}")
             return False
+
 
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
