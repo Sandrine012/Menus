@@ -569,17 +569,16 @@ class MenuGenerator:
         except Exception as e:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
-
+    
     def est_recente(self, recette_page_id_str, date_debut_menu, date_fin_menu):
         try:
             df_hist = self.menus_history_manager.df_menus_historique
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
                 return False
     
-            # Nouvelle fenêtre : 42 jours avant le dernier jour du menu planifié, jusqu’à 14 jours après
+            # Fenêtre : de (dernier jour du menu à planifier - 42 jours) jusqu’à (dernier jour + 14 jours)
             delta_arriere = self.params["NB_JOURS_ANTI_REPETITION"]
-            delta_avant = 14  # ou la durée réelle de ton menu si >14 jours
-    
+            delta_avant = 14  # ou la durée (en jours) de ton menu si c’est plus long
             debut = date_fin_menu - timedelta(days=delta_arriere)
             fin = date_fin_menu + timedelta(days=delta_avant)
     
@@ -591,8 +590,9 @@ class MenuGenerator:
     
             return not df_hist.loc[mask].empty
         except Exception as e:
-            logger.error(f"Erreur est_recente pour {recette_page_id_str}: {e}")
             return False
+
+
 
 
 
@@ -695,7 +695,7 @@ class MenuGenerator:
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
                 continue
             
-            if self.est_recente(recette_id_str_cand, date_repas):
+            if self.est_recente(recette_id_str_cand, date_debut_menu, date_fin_menu):
                 continue
             
             if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
@@ -735,7 +735,7 @@ class MenuGenerator:
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
             transportable_req_str, temps_req_str, nutrition_req_str,
-            exclure_recettes_ids=exclure_recettes_ids
+            exclure_recettes_ids=exclure_recettes_ids,date_debut_menu=date_debut_menu, date_fin_menu=date_fin_menu
         )
         if not recettes_candidates_initiales:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
@@ -877,6 +877,11 @@ class MenuGenerator:
 
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
+
+        planning_sorted = self.df_planning.sort_values("Date")
+        date_debut_menu = planning_sorted["Date"].min()
+        date_fin_menu = planning_sorted["Date"].max()
+
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
 
