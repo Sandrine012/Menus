@@ -510,15 +510,9 @@ class RecetteManager:
 class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
-            self.df_menus_historique = df_menus_hist.copy()
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='%Y-%m-%d', errors="coerce")
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='mixed', errors='coerce').dt.normalize()
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='ISO8601', errors='coerce').dt.normalize()
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors='coerce')
-            #self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"]).dt.normalize()
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='%d/%m/%Y %H:%M', errors='coerce').dt.normalize()
-            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        self.df_menus_historique = df_menus_hist.copy()
+        self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors='coerce').dt.normalize()
+        self.df_menus_historique.dropna(subset=["Date"], inplace=True)
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
                 self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
