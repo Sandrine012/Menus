@@ -511,6 +511,8 @@ class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
             self.df_menus_historique = df_menus_hist.copy()
+            print(self.df_menus_historique["Date"])
+            print(self.df_menus_historique["Date"].dtype)
             self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='mixed', errors='coerce').dt.normalize()
             self.df_menus_historique.dropna(subset=["Date"], inplace=True)
             if 'Date' in self.df_menus_historique.columns:
