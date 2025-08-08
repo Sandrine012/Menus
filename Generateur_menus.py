@@ -578,21 +578,31 @@ class MenuGenerator:
 
     
     def est_recente(self, recette_id, date_actuelle):
-        # 1. On récupère toutes les dates où la recette a été utilisée
-        dates_recette = self.df_menus_historique.loc[
-            self.df_menus_historique['Recette'] == recette_id, 'Date'
-        ]
+        """
+        Vérifie si une recette a été utilisée récemment ou est déjà planifiée.
+        Considère l'historique des 42 jours précédents ET les menus planifiés pour l'avenir.
+        """
+        try:
+            df_hist = self.menus_history_manager.df_menus_historique
+            
+            # On récupère toutes les dates où la recette a été utilisée
+            # Conversion en str pour assurer la compatibilité des types de données
+            dates_recette = df_hist[df_hist['Recette'].astype(str) == str(recette_id)]['Date']
+    
+            if dates_recette.empty:
+                return False
+    
+            # La fenêtre de non-répétition commence 42 jours avant la date actuelle.
+            # En utilisant normalize(), on s'assure que l'heure n'affecte pas la comparaison.
+            start_date = date_actuelle.normalize() - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+    
+            # On vérifie si une des dates de la recette se situe dans la fenêtre.
+            # Cette vérification inclut les dates passées et les dates futures.
+            return any((d.normalize() >= start_date) for d in dates_recette)
         
-        if dates_recette.empty:
+        except Exception as e:
+            logger.error(f"Erreur dans la vérification de la fraîcheur de la recette {recette_id}: {e}")
             return False
-    
-        # 2. On définit la fenêtre de non-répétition par rapport à la date du jour
-        aujourdhui = datetime.now().date()
-        start_date = aujourdhui - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-    
-        # 3. On vérifie si une des dates de la recette se situe dans la fenêtre
-        # La fenêtre s'étend de 42 jours avant aujourd'hui jusqu'à l'infini (toutes les dates futures)
-        return any(d.date() >= start_date for d in dates_recette)
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
