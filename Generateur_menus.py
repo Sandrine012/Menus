@@ -575,22 +575,23 @@ class MenuGenerator:
             df_hist = self.menus_history_manager.df_menus_historique
             if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Recette']):
                 return False
-
-            debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            fin = date_actuelle
+    
+            # Début = 42 jours avant aujourd'hui
+            debut = datetime.now() - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            # Fin = max() des dates historiques (y compris futur)
+            fin = df_hist['Date'].max()
+    
             mask = (
                 (df_hist['Recette'].astype(str) == str(recette_page_id_str)) &
                 (df_hist['Date'] > debut) &
                 (df_hist['Date'] <= fin)
             )
-            is_recent = not df_hist.loc[mask].empty
-            if is_recent:
-                logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Est récente (dans les {self.params['NB_JOURS_ANTI_REPETITION']} jours)")
-            return is_recent
-
+    
+            return not df_hist.loc[mask].empty
         except Exception as e:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
+
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
