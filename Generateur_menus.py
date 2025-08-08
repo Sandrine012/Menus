@@ -576,8 +576,6 @@ class MenuGenerator:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
 
-
-    from datetime import datetime, timedelta
     
     def est_recente(self, recette_id, date_actuelle):
         # 1. On récupère toutes les dates où la recette a été utilisée
