@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import time, httpx
 from notion_client import Client
 from notion_client.errors import RequestTimeoutError, APIResponseError
+from dateutil import parser
 
 # ────── CONFIGURATION INITIALE ──────────────────────────────────
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
@@ -510,11 +511,19 @@ class RecetteManager:
 class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
-            self.df_menus_historique = df_menus_hist.copy()
-            print(self.df_menus_historique["Date"])
-            print(self.df_menus_historique["Date"].dtype)
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='mixed', errors='coerce').dt.normalize()
-            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        self.df_menus_historique = df_menus_hist.copy()
+    
+        def parse_date(date_str):
+            if pd.isna(date_str) or not date_str:
+                return pd.NaT
+            try:
+                return parser.parse(date_str).date()
+            except Exception:
+                return pd.NaT
+    
+        self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
+        self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"])
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
                 self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
@@ -582,23 +591,22 @@ class MenuGenerator:
             df_hist = self.menus_history_manager.df_menus_historique
             
             # On récupère toutes les dates où la recette a été utilisée
-            # Conversion en str pour assurer la compatibilité des types de données
             dates_recette = df_hist[df_hist['Recette'].astype(str) == str(recette_id)]['Date']
     
             if dates_recette.empty:
                 return False
     
             # La fenêtre de non-répétition commence 42 jours avant la date actuelle.
-            # En utilisant normalize(), on s'assure que l'heure n'affecte pas la comparaison.
-            start_date = date_actuelle.normalize() - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            start_date = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
     
             # On vérifie si une des dates de la recette se situe dans la fenêtre.
-            # Cette vérification inclut les dates passées et les dates futures.
-            return any((d.normalize() >= start_date) for d in dates_recette)
+            return any((d >= start_date) for d in dates_recette)
         
         except Exception as e:
             logger.error(f"Erreur dans la vérification de la fraîcheur de la recette {recette_id}: {e}")
             return False
+    
+
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         try:
