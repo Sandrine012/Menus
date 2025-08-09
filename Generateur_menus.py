@@ -555,8 +555,13 @@ class MenuGenerator:
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
             # Correction : Spécifiez le format de date
-            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], format='%d/%m/%Y', errors='coerce')
-            self.df_planning.dropna(subset=['Date'], inplace=True)
+            # NOUVEAU – parse tout format ISO, garde heure / TZ, puis normalise
+            self.df_planning['Date'] = pd.to_datetime(
+                self.df_planning['Date'],
+                errors='coerce',           # accepte '2025-08-08T19:00:00.000+02:00'
+                utc=True                   # gère les fuseaux
+            ).dt.tz_convert(None).dt.normalize()   # rend naïf et met l’heure à 00:00
+
         else:
             logger.error("'Date' manquante dans le planning.")
             raise ValueError("Colonne 'Date' manquante dans le fichier de planning.")
