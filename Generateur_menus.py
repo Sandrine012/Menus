@@ -750,181 +750,181 @@ class MenuGenerator:
 
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
-    if exclure_recettes_ids is None:
-        exclure_recettes_ids = set()
-
-    # Réinitialisation des trackers pour chaque nouvelle génération de menu
-    self.recettes_selectionnees_semaine = []
-    self.mots_cles_selectionnes_semaine = set()
-
-    resultats_df_list = []
-    repas_b_utilises_ids = []
-    plats_transportables_semaine = {}
-    used_recipes_current_generation_set = set()
-    menu_recent_noms = []
-    ingredients_menu_cumules = {}
-
-    # 🔹 Correction : dictionnaire global d’utilisation d’ingrédients (ne sera pas vidé)
-    ingredients_utilises_cette_semaine = {}
-
-    if mode == 'alternatif':
-        self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
-
-        planning_sorted = self.df_planning.sort_values("Date")
-        for index, repas_planning_row in planning_sorted.iterrows():
-            date_repas_dt = repas_planning_row["Date"]
-            participants_str = str(repas_planning_row["Participants"])
-            participants_count = self.compter_participants(participants_str)
-            transportable_req = str(repas_planning_row.get("Transportable", "")).strip().lower()
-            temps_req = str(repas_planning_row.get("Temps", "")).strip().lower()
-            nutrition_req = str(repas_planning_row.get("Nutrition", "")).strip().lower()
-
-            recette_choisie_id = None
-            nom_plat_final = "Erreur - Plat non défini"
-            remarques_repas = ""
-            temps_prep_final = 0
-
-            if participants_str == "B":
-                nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
-                    date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
-                )
-                if recette_choisie_id:
-                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-            else:
-                # Première tentative avec contraintes pleines
-                recette_choisie_id, _ = self._traiter_menu_standard(
-                    date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
-                    menu_recent_noms, transportable_req, temps_req, nutrition_req,
-                    exclure_recettes_ids=exclure_recettes_ids,
-                    ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine  # 🔹 Passage du dict global
-                )
-
-                # Si échec → relâchement des contraintes
-                if recette_choisie_id is None:
-                    remarques_repas = "Aucune recette appropriée trouvée selon les critères."
-                    # 1. Relâche nutrition
-                    if nutrition_req == "équilibré" and not recette_choisie_id:
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count,
-                            used_recipes_current_generation_set, menu_recent_noms,
-                            transportable_req, temps_req, "normal",
-                            exclure_recettes_ids=exclure_recettes_ids,
-                            ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += " Contrainte nutritionnelle relâchée."
-
-                    # 2. Relâche temps
-                    if temps_req in ["express", "rapide"] and not recette_choisie_id:
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count,
-                            used_recipes_current_generation_set, menu_recent_noms,
-                            transportable_req, "normal", nutrition_req,
-                            exclure_recettes_ids=exclure_recettes_ids,
-                            ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += " Contrainte de temps relâchée."
-
-                    # 3. Relâche transportable
-                    if transportable_req == "oui" and not recette_choisie_id:
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count,
-                            used_recipes_current_generation_set, menu_recent_noms,
-                            "non", temps_req, nutrition_req,
-                            exclure_recettes_ids=exclure_recettes_ids,
-                            ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += " Contrainte transportable relâchée."
-
-                    # 4. Tout relâcher
-                    if not recette_choisie_id:
-                        recette_choisie_id, _ = self._traiter_menu_standard(
-                            date_repas_dt, participants_str, participants_count,
-                            used_recipes_current_generation_set, menu_recent_noms,
-                            "non", "normal", "normal",
-                            exclure_recettes_ids=exclure_recettes_ids,
-                            ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
-                        )
-                        if recette_choisie_id:
-                            remarques_repas += " Toutes contraintes relâchées."
-
-                # Définir le nom final
-                if recette_choisie_id:
-                    nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
-                    temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
-                    if not remarques_repas:
-                        remarques_repas = "Généré automatiquement"
+        if exclure_recettes_ids is None:
+            exclure_recettes_ids = set()
+    
+        # Réinitialisation des trackers pour chaque nouvelle génération de menu
+        self.recettes_selectionnees_semaine = []
+        self.mots_cles_selectionnes_semaine = set()
+    
+        resultats_df_list = []
+        repas_b_utilises_ids = []
+        plats_transportables_semaine = {}
+        used_recipes_current_generation_set = set()
+        menu_recent_noms = []
+        ingredients_menu_cumules = {}
+    
+        # 🔹 Correction : dictionnaire global d’utilisation d’ingrédients (ne sera pas vidé)
+        ingredients_utilises_cette_semaine = {}
+    
+        if mode == 'alternatif':
+            self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
+    
+            planning_sorted = self.df_planning.sort_values("Date")
+            for index, repas_planning_row in planning_sorted.iterrows():
+                date_repas_dt = repas_planning_row["Date"]
+                participants_str = str(repas_planning_row["Participants"])
+                participants_count = self.compter_participants(participants_str)
+                transportable_req = str(repas_planning_row.get("Transportable", "")).strip().lower()
+                temps_req = str(repas_planning_row.get("Temps", "")).strip().lower()
+                nutrition_req = str(repas_planning_row.get("Nutrition", "")).strip().lower()
+    
+                recette_choisie_id = None
+                nom_plat_final = "Erreur - Plat non défini"
+                remarques_repas = ""
+                temps_prep_final = 0
+    
+                if participants_str == "B":
+                    nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
+                        date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
+                    )
+                    if recette_choisie_id:
+                        temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
                 else:
-                    nom_plat_final = "Recette non trouvée"
-
-            # Si une recette est choisie → MAJ trackers
-            if recette_choisie_id:
-                # Ajout au suivi recettes et mots-clés
-                self.recettes_selectionnees_semaine.append(recette_choisie_id)
-                self.mots_cles_selectionnes_semaine.add(nom_plat_final.split()[0].lower())
-
-                # 🔹 MAJ du dict global ingrédients
-                ingredients_recette_choisie = {
-                    i.get("Ingrédient ok")
-                    for i in self.recette_manager.get_ingredients_for_recipe(recette_choisie_id)
-                    if i.get("Ingrédient ok")
-                }
-                for ing_id in ingredients_recette_choisie:
-                    ingredients_utilises_cette_semaine[ing_id] = date_repas_dt
-
-                # MAJ quantités pour liste de courses
-                ingredients_necessaires = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
-                for ing_id, qte_menu in ingredients_necessaires.items():
-                    ingredients_menu_cumules[ing_id] = ingredients_menu_cumules.get(ing_id, 0.0) + qte_menu
-
-                # Décrémenter le stock si nécessaire
-                if not self.ne_pas_decrementer_stock:
-                    self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
-
-                # Plats transportables
-                if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
-                    plats_transportables_semaine[date_repas_dt] = recette_choisie_id
-
-                used_recipes_current_generation_set.add(recette_choisie_id)
-
-            # Logging et ajout au résultat
-            self._log_decision_recette(recette_choisie_id, date_repas_dt, participants_str)
-            self._ajouter_resultat(resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
-                                   remarques_repas, temps_prep_final, recette_choisie_id)
-
-            # Mémoriser le nom pour anti-répétition courte
-            if nom_plat_final and all(x not in nom_plat_final for x in ["Pas de recette", "Pas de reste", "Erreur", "Invalide"]):
-                menu_recent_noms.append(nom_plat_final)
-                if len(menu_recent_noms) > 3:
-                    menu_recent_noms.pop(0)
-
-        # Création du DataFrame final + liste de courses
-        df_menu_genere = pd.DataFrame(resultats_df_list)
-
-        liste_courses_data = []
-        for ing_id, qte_menu in ingredients_menu_cumules.items():
-            nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
-            qte_stock_initial = self.recette_manager.obtenir_qte_stock_initial_par_id(ing_id)
-            unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
-            qte_stock_simule = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
-            qte_acheter = max(0, qte_menu - qte_stock_initial)
-            liste_courses_data.append({
-                "Ingredient": f"{nom_ing} ({unite})",
-                "Quantité du menu": f"{qte_menu:.2f}",
-                "Qte reste (initiale)": f"{qte_stock_initial:.2f}",
-                "Qte reste (simulée)": f"{qte_stock_simule:.2f}",
-                "Quantité à acheter": f"{qte_acheter:.2f}"
-            })
-
-        if not df_menu_genere.empty and 'Date' in df_menu_genere.columns:
-            df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'],
-                                                    format="%d/%m/%Y %H:%M",
-                                                    errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
-            liste_courses_data.sort(key=lambda x: x["Ingredient"])
-
-        return df_menu_genere, liste_courses_data
+                    # Première tentative avec contraintes pleines
+                    recette_choisie_id, _ = self._traiter_menu_standard(
+                        date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
+                        menu_recent_noms, transportable_req, temps_req, nutrition_req,
+                        exclure_recettes_ids=exclure_recettes_ids,
+                        ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine  # 🔹 Passage du dict global
+                    )
+    
+                    # Si échec → relâchement des contraintes
+                    if recette_choisie_id is None:
+                        remarques_repas = "Aucune recette appropriée trouvée selon les critères."
+                        # 1. Relâche nutrition
+                        if nutrition_req == "équilibré" and not recette_choisie_id:
+                            recette_choisie_id, _ = self._traiter_menu_standard(
+                                date_repas_dt, participants_str, participants_count,
+                                used_recipes_current_generation_set, menu_recent_noms,
+                                transportable_req, temps_req, "normal",
+                                exclure_recettes_ids=exclure_recettes_ids,
+                                ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
+                            )
+                            if recette_choisie_id:
+                                remarques_repas += " Contrainte nutritionnelle relâchée."
+    
+                        # 2. Relâche temps
+                        if temps_req in ["express", "rapide"] and not recette_choisie_id:
+                            recette_choisie_id, _ = self._traiter_menu_standard(
+                                date_repas_dt, participants_str, participants_count,
+                                used_recipes_current_generation_set, menu_recent_noms,
+                                transportable_req, "normal", nutrition_req,
+                                exclure_recettes_ids=exclure_recettes_ids,
+                                ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
+                            )
+                            if recette_choisie_id:
+                                remarques_repas += " Contrainte de temps relâchée."
+    
+                        # 3. Relâche transportable
+                        if transportable_req == "oui" and not recette_choisie_id:
+                            recette_choisie_id, _ = self._traiter_menu_standard(
+                                date_repas_dt, participants_str, participants_count,
+                                used_recipes_current_generation_set, menu_recent_noms,
+                                "non", temps_req, nutrition_req,
+                                exclure_recettes_ids=exclure_recettes_ids,
+                                ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
+                            )
+                            if recette_choisie_id:
+                                remarques_repas += " Contrainte transportable relâchée."
+    
+                        # 4. Tout relâcher
+                        if not recette_choisie_id:
+                            recette_choisie_id, _ = self._traiter_menu_standard(
+                                date_repas_dt, participants_str, participants_count,
+                                used_recipes_current_generation_set, menu_recent_noms,
+                                "non", "normal", "normal",
+                                exclure_recettes_ids=exclure_recettes_ids,
+                                ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
+                            )
+                            if recette_choisie_id:
+                                remarques_repas += " Toutes contraintes relâchées."
+    
+                    # Définir le nom final
+                    if recette_choisie_id:
+                        nom_plat_final = self.recette_manager.obtenir_nom(recette_choisie_id)
+                        temps_prep_final = self.recette_manager.obtenir_temps_preparation(recette_choisie_id)
+                        if not remarques_repas:
+                            remarques_repas = "Généré automatiquement"
+                    else:
+                        nom_plat_final = "Recette non trouvée"
+    
+                # Si une recette est choisie → MAJ trackers
+                if recette_choisie_id:
+                    # Ajout au suivi recettes et mots-clés
+                    self.recettes_selectionnees_semaine.append(recette_choisie_id)
+                    self.mots_cles_selectionnes_semaine.add(nom_plat_final.split()[0].lower())
+    
+                    # 🔹 MAJ du dict global ingrédients
+                    ingredients_recette_choisie = {
+                        i.get("Ingrédient ok")
+                        for i in self.recette_manager.get_ingredients_for_recipe(recette_choisie_id)
+                        if i.get("Ingrédient ok")
+                    }
+                    for ing_id in ingredients_recette_choisie:
+                        ingredients_utilises_cette_semaine[ing_id] = date_repas_dt
+    
+                    # MAJ quantités pour liste de courses
+                    ingredients_necessaires = self.recette_manager.calculer_quantite_necessaire(recette_choisie_id, participants_count)
+                    for ing_id, qte_menu in ingredients_necessaires.items():
+                        ingredients_menu_cumules[ing_id] = ingredients_menu_cumules.get(ing_id, 0.0) + qte_menu
+    
+                    # Décrémenter le stock si nécessaire
+                    if not self.ne_pas_decrementer_stock:
+                        self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
+    
+                    # Plats transportables
+                    if participants_str != "B" and self.recette_manager.est_transportable(recette_choisie_id):
+                        plats_transportables_semaine[date_repas_dt] = recette_choisie_id
+    
+                    used_recipes_current_generation_set.add(recette_choisie_id)
+    
+                # Logging et ajout au résultat
+                self._log_decision_recette(recette_choisie_id, date_repas_dt, participants_str)
+                self._ajouter_resultat(resultats_df_list, date_repas_dt, nom_plat_final, participants_str,
+                                       remarques_repas, temps_prep_final, recette_choisie_id)
+    
+                # Mémoriser le nom pour anti-répétition courte
+                if nom_plat_final and all(x not in nom_plat_final for x in ["Pas de recette", "Pas de reste", "Erreur", "Invalide"]):
+                    menu_recent_noms.append(nom_plat_final)
+                    if len(menu_recent_noms) > 3:
+                        menu_recent_noms.pop(0)
+    
+            # Création du DataFrame final + liste de courses
+            df_menu_genere = pd.DataFrame(resultats_df_list)
+    
+            liste_courses_data = []
+            for ing_id, qte_menu in ingredients_menu_cumules.items():
+                nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id)
+                qte_stock_initial = self.recette_manager.obtenir_qte_stock_initial_par_id(ing_id)
+                unite = self.recette_manager.obtenir_unite_ingredient_par_id(ing_id) or "unité(s)"
+                qte_stock_simule = self.recette_manager.obtenir_qte_stock_par_id(ing_id)
+                qte_acheter = max(0, qte_menu - qte_stock_initial)
+                liste_courses_data.append({
+                    "Ingredient": f"{nom_ing} ({unite})",
+                    "Quantité du menu": f"{qte_menu:.2f}",
+                    "Qte reste (initiale)": f"{qte_stock_initial:.2f}",
+                    "Qte reste (simulée)": f"{qte_stock_simule:.2f}",
+                    "Quantité à acheter": f"{qte_acheter:.2f}"
+                })
+    
+            if not df_menu_genere.empty and 'Date' in df_menu_genere.columns:
+                df_menu_genere['Date'] = pd.to_datetime(df_menu_genere['Date'],
+                                                        format="%d/%m/%Y %H:%M",
+                                                        errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                liste_courses_data.sort(key=lambda x: x["Ingredient"])
+    
+            return df_menu_genere, liste_courses_data
 
     
     def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, exclure_recettes_ids=None):
