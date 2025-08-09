@@ -1602,7 +1602,8 @@ def main():
             if 'liste_courses_alternatif' in st.session_state and st.session_state['liste_courses_alternatif']:
                 liste_courses_df_alternatif = pd.DataFrame(st.session_state['liste_courses_alternatif'])
                 st.dataframe(liste_courses_df_alternatif, use_container_width=True)
-                csv_alternatif = liste_courses_df_alternatif.to_csv(index=False, sep=';', encodfing='utf-8-sig')
+                csv_alternatif = liste_courses_df_alternatif.to_csv(index=False, sep=';', encoding='utf-8-sig')
+                
                 st.download_button(
                     label="Télécharger la liste de courses ALTERNATIVE (CSV)",
                     data=csv_alternatif,
