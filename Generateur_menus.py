@@ -1621,7 +1621,21 @@ def main():
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses alternative.")
             
-    
+            # ⬇️ AJOUTE CE QUI SUIT
+            st.subheader("Aperçu de l'historique des menus (5 dernières lignes)")
+            if 'menu_generator_realiste' in st.session_state:
+                histo_df = (
+                    st.session_state['menu_generator_realiste']
+                    .menus_history_manager
+                    .df_menus_historique
+                    .tail()
+                )
+                st.dataframe(histo_df, use_container_width=True)
+            else:
+                st.info("Aucun historique chargé pour l’instant – générez d’abord un menu.")
+            # ⬆️ FIN DU BLOC AJOUTÉ
+            # ----- Y : la suite de ton script -----
+            
 
 if __name__ == "__main__":
     main()
