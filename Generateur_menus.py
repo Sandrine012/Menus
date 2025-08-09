@@ -101,26 +101,56 @@ def prop_val(p,k):
     if k=="number":  return str(p.get("number") or "")
     return ""
 
-def extract_recettes(saison_filtre):
-    filt = {"and":[
-        {"property":"Elément parent","relation":{"is_empty":True}},
-        {"or":[
-            {"property":"Saison","multi_select":{"contains":"Toute l'année"}},
-            {"property":"Saison","multi_select":{"contains":saison_filtre}},
-            {"property":"Saison","multi_select":{"is_empty":True}}]},
-        {"or":[
-            {"property":"Type_plat","multi_select":{"contains":"Salade"}},
-            {"property":"Type_plat","multi_select":{"contains":"Soupe"}},
-            {"property":"Type_plat","multi_select":{"contains":"Plat"}}]}]}
-    rows=[]
-    for p in paginate(ID_RECETTES, filter=filt):
-        pr=p["properties"]; row=[p["id"]]
-        for col in HDR_RECETTES[1:]:
-            key,kind=MAP_REC[col]; row.append(prop_val(pr.get(key),kind))
-        rows.append(row)
-    return pd.DataFrame(rows,columns=HDR_RECETTES)
+# ────── EXTRACTION DES RECETTES AVEC EXCLUSION HISTORIQUE ─────────────
+def extract_recettes(saison_filtre, df_menus_hist=None, df_planning=None):
+    """
+    Version mise à jour :
+      – Exclut les recettes qui apparaissent dans les menus
+        entre (première date du planning – 42 jours) et la première date du planning.
+      – Conserve le filtrage saison / type de plat existant.
+    """
+    # 1) Déterminer la période d’exclusion ──────────────────────────────
+    recettes_a_exclure = set()
+    if df_menus_hist is not None and df_planning is not None and not df_planning.empty:
+        debut_planning = pd.to_datetime(df_planning["Date"]).min()
+        if pd.notna(debut_planning):
+            fenetre_debut = debut_planning - timedelta(days=42)
+            mask = (df_menus_hist["Date"] >= fenetre_debut) & (df_menus_hist["Date"] <= debut_planning)
+            recettes_a_exclure = set(df_menus_hist.loc[mask, "Recette"].astype(str))
 
-HDR_MENUS = ["Nom Menu","Recette","Date"]
+    # 2) Filtre Notion (identique à l’ancien code) ──────────────────────
+    filt = {
+        "and": [
+            {"property": "Elément parent", "relation": {"is_empty": True}},
+            {"or": [
+                {"property": "Saison", "multi_select": {"contains": "Toute l'année"}},
+                {"property": "Saison", "multi_select": {"contains": saison_filtre}},
+                {"property": "Saison", "multi_select": {"is_empty": True}}
+            ]},
+            {"or": [
+                {"property": "Type_plat", "multi_select": {"contains": "Salade"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Soupe"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
+            ]}
+        ]
+    }
+
+    # 3) Pagination Notion + exclusion ──────────────────────────────────
+    rows = []
+    for p in paginate(ID_RECETTES, filter=filt):
+        recette_id = str(p["id"])
+        if recette_id in recettes_a_exclure:        # <-- exclusion historique
+            continue
+
+        pr = p["properties"]
+        row = [recette_id]
+        for col in HDR_RECETTES[1:]:
+            key, kind = MAP_REC[col]
+            row.append(prop_val(pr.get(key), kind))
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=HDR_RECETTES)
+
 def extract_menus():
     rows=[]
     for p in paginate(ID_MENUS,
