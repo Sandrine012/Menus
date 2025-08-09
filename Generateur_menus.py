@@ -551,22 +551,21 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            self.df_planning["Date"] = (
-                pd.to_datetime(self.df_planning["Date"], errors="coerce", utc=True)
-                  .dt.tz_convert(None)
-                  .dt.normalize()
-            )
-            self.df_planning.dropna(subset=["Date"], inplace=True)
+            # Correction : Spécifiez le format de date
+            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], format='%d/%m/%Y', errors='coerce')
+            self.df_planning.dropna(subset=['Date'], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
             raise ValueError("Colonne 'Date' manquante dans le fichier de planning.")
-        
+
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
-        self.menus_history_manager = MenusHistoryManager(df_menus_hist) # <-- Cette ligne est essentielle
+        self.menus_history_manager = MenusHistoryManager(df_menus_hist)
         self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
         self.params = params
+
+        # Ajout de ces listes pour suivre les recettes et les mots-clés de la semaine
         self.recettes_selectionnees_semaine = []
-        self.mots_cles_selectionnes_semaine = set()
+        self.mots_cles_selectionnes_semaine = set() # Utilisation d'un set pour une meilleure performance
         
     def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
         # ... (Cette méthode reste inchangée)
@@ -676,14 +675,22 @@ class MenuGenerator:
 
             # NOUVEAU: Vérification des ingrédients en fonction de leur intervalle
             ingredients_recette_cand = {i.get("Ingrédient ok") for i in self.recette_manager.get_ingredients_for_recipe(recette_id_str_cand) if i.get("Ingrédient ok")}
-            # Vérification de la non-répétition de la recette elle-même.
-            if self.est_recente(recette_id_str_cand, date_repas):
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Répétition trop récente.")
-                continue
-
-            # Vérification de l'intervalle de réutilisation des ingrédients de la recette.
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
-                # La méthode est_intervalle_respecte gère déjà le message de log
+            is_interval_ok = True
+            noms_ingredients_communs = []
+            for ing_id in ingredients_recette_cand:
+                if ing_id in ingredients_utilises_cette_semaine:
+                    date_derniere_utilisation = ingredients_utilises_cette_semaine[ing_id]
+                    jours_ecoules = (date_repas - date_derniere_utilisation).days
+                    
+                    intervalle_jrs_ing = self.recette_manager.get_intervalle_ingredient(ing_id)
+                    
+                    if intervalle_jrs_ing is not None and jours_ecoules < intervalle_jrs_ing:
+                        noms_ingredients_communs.append(self.recette_manager.obtenir_nom_ingredient_par_id(ing_id))
+                        is_interval_ok = False
+                        break
+            
+            if not is_interval_ok:
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Contient un ingrédient déjà utilisé trop récemment ({', '.join(noms_ingredients_communs)}).")
                 continue
 
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
