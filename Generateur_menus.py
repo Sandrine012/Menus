@@ -488,7 +488,7 @@ class RecetteManager:
         except Exception as e:
             logger.error(f"Erreur obtention temps prép pour {recette_page_id_str}: {e}")
             return VALEUR_DEFAUT_TEMPS_PREPARATION
-    
+
     def obtenir_calories(self, recette_page_id_str):
         try:
             recette_page_id_str = str(recette_page_id_str)
@@ -496,7 +496,6 @@ class RecetteManager:
                 calories_str = self.df_recettes.loc[recette_page_id_str, "Calories"]
             else:
                 calories_str = self.df_recettes[self.df_recettes[COLONNE_ID_RECETTE].astype(str) == recette_page_id_str]["Calories"].iloc[0]
-            
             return float(calories_str) if pd.notna(calories_str) and str(calories_str).replace('.', '', 1).isdigit() else 0.0
         except (KeyError, IndexError):
             logger.debug(f"Recette ID {recette_page_id_str} non trouvée pour Calories.")
@@ -511,51 +510,49 @@ class RecetteManager:
 class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
-            self.df_menus_historique = df_menus_hist.copy()
-    
-            def parse_date(date_str):
-                if pd.isna(date_str) or not date_str:
-                    return pd.NaT
-                try:
-                    return parser.parse(date_str).date()
-                except Exception:
-                    return pd.NaT
-    
-            self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
-            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
-            self.df_menus_historique["Date"] = pd.to_datetime(
-                self.df_menus_historique["Date"], errors="coerce", utc=True    # parse tout (ISO, TZ, etc.)
-            ).dt.tz_convert(None)                                              # rend la date naïve
-            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
-    
-            if 'Date' in self.df_menus_historique.columns:
-                self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
-                self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
-            else:
-                logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
-                self.recettes_historique_counts = {}
+        self.df_menus_historique = df_menus_hist.copy()
+        def parse_date(date_str):
+            if pd.isna(date_str) or not date_str:
+                return pd.NaT
+            try:
+                return parser.parse(date_str).date()
+            except Exception:
+                return pd.NaT
+        self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
+        self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        self.df_menus_historique["Date"] = pd.to_datetime(
+            self.df_menus_historique["Date"], errors="coerce", utc=True
+        )
+        self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        
+        # Ajout de la gestion de l'historique de fréquence
+        self.df_menus_historique["Recette_split"] = self.df_menus_historique["Recette"].astype(str).str.split(', ').fillna('')
+        all_recettes = self.df_menus_historique["Recette_split"].explode()
+        self.recettes_historique_counts = all_recettes.value_counts().to_dict()
 
-    def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
-        """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
-        try:
-            df_hist = self.df_menus_historique
-            if df_hist.empty or intervalle_jours <= 0:
-                return False
+    def get_last_use_date_ingredient(self, ingredient_id_str):
+        """Recherche la dernière date d'utilisation d'un ingrédient."""
+        matching_rows = self.df_menus_historique[self.df_menus_historique["Recette_split"].apply(lambda x: any(self._is_ingredient_in_recette(rec_id, ingredient_id_str) for rec_id in x))]
+        if not matching_rows.empty:
+            return matching_rows["Date"].max()
+        return None
 
-            debut = date_actuelle - timedelta(days=intervalle_jours + 1)
-            
-            return False # Placeholder
-        except Exception as e:
-            logger.error(f"Erreur dans is_ingredient_recent pour {ingredient_id_str}: {e}")
-            return False
-
+    def _is_ingredient_in_recette(self, recette_id_str, ingredient_id_str):
+        # Cette méthode nécessite d'accéder au RecetteManager ou d'avoir une structure de données
+        # des recettes et de leurs ingrédients.
+        # Pour l'instant, on suppose qu'elle est implémentée ailleurs.
+        # Si vous avez besoin de cette fonctionnalité, vous devrez la lier à RecetteManager.
+        return False
+        
+class MenuGenerator:
+    """Génère les menus en fonction du planning et des règles."""
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
             self.df_planning["Date"] = (
                 pd.to_datetime(self.df_planning["Date"], errors="coerce", utc=True)
-                .dt.tz_convert(None)
-                .dt.normalize()
+                  .dt.tz_convert(None)
+                  .dt.normalize()
             )
             self.df_planning.dropna(subset=["Date"], inplace=True)
         else:
@@ -593,8 +590,7 @@ class MenusHistoryManager:
             if self.est_recente(recette_id_str_cand, date_repas):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Répétition trop récente.")
                 continue
-            
-            # Correction : le bloc suivant est dupliqué dans votre code, ici il est unique
+
             mot_cle_recette = nom_recette_cand.split()[0].lower()
             if mot_cle_recette in self.mots_cles_selectionnes_semaine:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
@@ -646,10 +642,7 @@ class MenusHistoryManager:
             
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
                 continue
-            
-            # Correction : les vérifications de récence et d'intervalle ne sont pas nécessaires ici
-            # car elles sont déjà effectuées au début de la boucle.
-            
+
             score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
             recettes_scores_dispo[recette_id_str_cand] = score_dispo
             recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
@@ -686,7 +679,6 @@ class MenusHistoryManager:
             debut_fenetre = dt_ref - delta
             fin_fenetre = dt_ref
             
-            # Correction de la logique de filtrage pour une meilleure robustesse
             dates_recette = self.menus_history_manager.df_menus_historique[
                 self.menus_history_manager.df_menus_historique["Recette"].astype(str).str.contains(recette_id, regex=False)
             ]["Date"]
