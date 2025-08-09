@@ -939,8 +939,22 @@ class MenuGenerator:
 
         return df_menu_genere, liste_courses_data
     
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, exclure_recettes_ids=None):
-        # ... (Cette méthode reste inchangée)
+    def _traiter_menu_standard(
+        self,
+        date_repas,
+        participants_str_codes,
+        participants_count_int,
+        used_recipes_in_current_gen_set,
+        menu_recent_noms_list,
+        transportable_req_str,
+        temps_req_str,
+        nutrition_req_str,
+        exclure_recettes_ids=None,
+        ingredients_utilises_cette_semaine=None   # ← AJOUTER ICI
+):
+        if ingredients_utilises_cette_semaine is None:   # ← pour éviter None
+            ingredients_utilises_cette_semaine = {}
+
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
