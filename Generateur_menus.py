@@ -615,7 +615,7 @@ class MenuGenerator:
         
             # 3) Dates de cette recette déjà présentes dans l’historique
             dates_recette = self.menus_history_manager.df_menus_historique[
-                self.menus_history_manager.df_menus_historique["Recette"].astype(str) == str(recette_id)
+                self.menus_history_manager.df_menus_historique["Recette"].astype(str).str.split(', ').apply(lambda x: str(recette_id) in x)
             ]["Date"]
         
             # 4) True si la recette apparaît entre (date-42 j) et (date)
