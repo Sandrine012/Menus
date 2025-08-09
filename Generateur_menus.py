@@ -588,17 +588,12 @@ class MenuGenerator:
             return set()
     
     def est_recente(self, recette_id, date_actuelle):
-        # ... (Cette méthode reste inchangée)
-        try:
-            df_hist = self.menus_history_manager.df_menus_historique
-            dates_recette = df_hist[df_hist['Recette'].astype(str) == str(recette_id)]['Date']
-            if dates_recette.empty:
-                return False
-            start_date = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            return any((d >= start_date) for d in dates_recette)
-        except Exception as e:
-            logger.error(f"Erreur dans la vérification de la fraîcheur de la recette {recette_id}: {e}")
-            return False
+        debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+        fin   = date_actuelle + timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+        mask  = (df_hist['Recette'].astype(str) == str(recette_id)) & \
+                (df_hist['Date'] >= debut) & (df_hist['Date'] <= fin)
+        return not df_hist.loc[mask].empty
+
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         # ... (Cette méthode reste inchangée)
@@ -908,11 +903,20 @@ class MenuGenerator:
                     recette_choisie_final = sorted(recettes_candidates_initiales, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
                 logger.debug(f"Recette choisie parmi les candidats généraux (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
-        if recette_choisie_final:
-            logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
+        # Si une recette est trouvée et qu’elle n’est PAS récente → on la renvoie
+        if recette_choisie_final and not self.est_recente(recette_choisie_final, date_repas):
+            logger.debug(
+                "Recette finale sélectionnée pour repas standard: "
+                f"{self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final})."
+            )
             return recette_choisie_final, recettes_manquants_dict.get(recette_choisie_final, {})
-        logger.debug(f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}.")
+        
+        # Sinon (aucune recette ou recette trop récente) → on signale l’échec
+        logger.debug(
+            f"Aucune recette finale sélectionnée pour repas standard à {date_repas.strftime('%Y-%m-%d %H:%M')}."
+        )
         return None, {}
+
     
     def _log_decision_recette(self, recette_id_str, date_repas, participants_str_codes):
         # ... (Cette méthode reste inchangée)
