@@ -524,9 +524,9 @@ class MenusHistoryManager:
             self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
             self.df_menus_historique.dropna(subset=["Date"], inplace=True)
             self.df_menus_historique["Date"] = pd.to_datetime(
-                self.df_menus_historique["Date"]
-            ).dt.normalize()            # ← met l’heure à 00:00:00
-
+                self.df_menus_historique["Date"], errors="coerce", utc=True    # parse tout (ISO, TZ, etc.)
+            ).dt.tz_convert(None)                                              # rend la date naïve
+            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
     
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
@@ -597,22 +597,22 @@ class MenuGenerator:
         Δ = NB_JOURS_ANTI_REPETITION (42 jours par défaut).
         """
         try:
-            df_hist = self.menus_history_manager.df_menus_historique
-            if df_hist.empty:
-                return False
-    
+            # 1) Date de référence sans fuseau et sans heure
+            dt_ref = pd.to_datetime(date_actuelle).normalize()
+        
+            # 2) Fenêtre de 42 jours (ou la valeur paramétrée)
             delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            dt_ref = pd.to_datetime(date_actuelle).normalize()   # ← enlève l’heure
             debut_fenetre = dt_ref - delta
             fin_fenetre   = dt_ref
-
-    
-            dates_recette = df_hist[
-                df_hist["Recette"].astype(str) == str(recette_id)
+        
+            # 3) Dates de cette recette déjà présentes dans l’historique
+            dates_recette = self.menus_history_manager.df_menus_historique[
+                self.menus_history_manager.df_menus_historique["Recette"].astype(str) == str(recette_id)
             ]["Date"]
-    
-            # True ⇨ la recette figure déjà entre (date − 42 j) et (date)
+        
+            # 4) True si la recette apparaît entre (date-42 j) et (date)
             return any(debut_fenetre <= d <= fin_fenetre for d in dates_recette)
+
         except Exception as e:
             logger.error(f"est_recente() : {e}")
             return False
