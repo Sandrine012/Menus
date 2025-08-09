@@ -1285,6 +1285,23 @@ def load_notion_data(saison_filtre_selection):
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
+
+        # ----- AJOUT N°2 : recharger l’historique si disponible -----
+    import os
+    if 'menu_generator_realiste' not in st.session_state and os.path.exists("menus_historique.csv"):
+        histo_df = pd.read_csv("menus_historique.csv", parse_dates=['Date'])
+        dummy_params = {'NB_JOURS_ANTI_REPETITION': NB_JOURS_ANTI_REPETITION_DEFAULT}
+        st.session_state['menu_generator_realiste'] = MenuGenerator(
+            histo_df,
+            pd.DataFrame(),            # Recettes vides (pas besoin ici)
+            pd.DataFrame(),            # Planning vide
+            pd.DataFrame(),            # Ingrédients vides
+            pd.DataFrame(),            # Ingrédients-recettes vides
+            ne_pas_decrementer_stock=True,
+            params=dummy_params
+        )
+    # ----- FIN AJOUT N°2 -----
+
     st.title("🍽️ Générateur de Menus et Liste de Courses")
     st.markdown("---")
     
@@ -1440,6 +1457,18 @@ def main():
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
 
+                # ----- AJOUT N°1 : mettre à jour l’historique -----
+                menu_generator_realiste.menus_history_manager.df_menus_historique = pd.concat(
+                    [
+                        menu_generator_realiste.menus_history_manager.df_menus_historique,
+                        df_menu_realiste[['Recette_ID', 'Date']].rename(columns={'Recette_ID': 'Recette'})
+                    ],
+                    ignore_index=True
+                )
+                menu_generator_realiste.menus_history_manager.df_menus_historique.to_csv("menus_historique.csv", index=False)
+                # ----- FIN AJOUT N°1 -----
+
+
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
                 menu_generator_alternatif = MenuGenerator(
@@ -1520,6 +1549,18 @@ def main():
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
+
+                # ----- AJOUT N°1 : mettre à jour l’historique -----
+                menu_generator_realiste.menus_history_manager.df_menus_historique = pd.concat(
+                    [
+                        menu_generator_realiste.menus_history_manager.df_menus_historique,
+                        df_menu_realiste[['Recette_ID', 'Date']].rename(columns={'Recette_ID': 'Recette'})
+                    ],
+                    ignore_index=True
+                )
+                menu_generator_realiste.menus_history_manager.df_menus_historique.to_csv("menus_historique.csv", index=False)
+                # ----- FIN AJOUT N°1 -----
+
 
                 recettes_a_exclure = set(df_menu_realiste[df_menu_realiste['Recette_ID'].notna()]['Recette_ID'].astype(str).tolist())
 
