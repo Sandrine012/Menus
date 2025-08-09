@@ -101,26 +101,49 @@ def prop_val(p,k):
     if k=="number":  return str(p.get("number") or "")
     return ""
 
-def extract_recettes(saison_filtre):
-    filt = {"and":[
-        {"property":"Elément parent","relation":{"is_empty":True}},
-        {"or":[
-            {"property":"Saison","multi_select":{"contains":"Toute l'année"}},
-            {"property":"Saison","multi_select":{"contains":saison_filtre}},
-            {"property":"Saison","multi_select":{"is_empty":True}}]},
-        {"or":[
-            {"property":"Type_plat","multi_select":{"contains":"Salade"}},
-            {"property":"Type_plat","multi_select":{"contains":"Soupe"}},
-            {"property":"Type_plat","multi_select":{"contains":"Plat"}}]}]}
-    rows=[]
-    for p in paginate(ID_RECETTES, filter=filt):
-        pr=p["properties"]; row=[p["id"]]
-        for col in HDR_RECETTES[1:]:
-            key,kind=MAP_REC[col]; row.append(prop_val(pr.get(key),kind))
-        rows.append(row)
-    return pd.DataFrame(rows,columns=HDR_RECETTES)
 
-HDR_MENUS = ["Nom Menu","Recette","Date"]
+HDR_RECETTES = [
+    "Page_ID", "Nom", "ID_Recette", "Saison",
+    "Calories", "Proteines", "Temps_total",
+    "Aime_pas_princip", "Type_plat", "Transportable"
+]
+
+# ── aide interne ────────────────────────────────────────────────
+def _prop_val(prop, kind):
+    """Extrait la valeur d’une propriété Notion selon son type."""
+    if not prop:
+        return ""
+    t = prop["type"]
+
+    if kind == "title":       # titre
+        return "".join(tg["plain_text"] for tg in prop["title"])
+
+    if kind == "uid":         # unique_id
+        uid = prop["unique_id"]; pr, num = uid.get("prefix"), uid.get("number")
+        return f"{pr}-{num}" if pr else str(num or "")
+
+    if kind == "ms":          # multi-select
+        return ", ".join(x["name"] for x in prop["multi_select"])
+
+    if kind == "roll":        # rollup (number)
+        return str(prop["rollup"].get("number") or "")
+
+    if kind == "form":        # formula (number ou string)
+        fo = prop["formula"]; return str(fo.get("number") or fo.get("string") or "")
+
+    if kind == "rollstr":     # rollup (array de formulas string)
+        return ", ".join(it["formula"].get("string") or "." for it in prop["rollup"]["array"])
+
+    if kind == "selcb":       # select « Oui » ou checkbox
+        if t == "select":
+            return "Oui" if (prop["select"] or {}).get("name","").lower() == "oui" else ""
+        if t == "checkbox":
+            return "Oui" if prop["checkbox"] else ""
+        return ""
+
+    return ""
+
+# ── fonction principale ────────────────────────────────────────
 def extract_menus():
     rows=[]
     for p in paginate(ID_MENUS,
@@ -143,6 +166,90 @@ def extract_menus():
 
 # Ajout de la colonne "Intervalle" pour les ingrédients.
 HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste", "Intervalle"]
+
+def extract_recettes(saison_filtre: str):
+    """
+    1. Récupère toutes les recettes de la base Notion « Recettes ».
+    2. Exclut celles dont la dernière apparition dans la base « Menus »
+       est datée de moins de NB_JOURS_ANTI_REPETITION (42 j par défaut).
+       On interroge donc d’abord la base « Menus ».
+    3. Ne conserve que les recettes « Plat / Salade / Soupe »,
+       compatibles avec la saison demandée.
+    4. Retourne un DataFrame prêt à l’emploi.
+    """
+
+    # 0. Constantes locales
+    NB_JOURS_ANTI_REPETITION = st.session_state.get("NB_JOURS_ANTI_REPETITION", 42)
+    limite_date = datetime.now().date() - timedelta(days=NB_JOURS_ANTI_REPETITION)
+
+    # 1. Récupération de l’historique des menus pour savoir
+    #    quand chaque recette a été servie pour la dernière fois.
+    df_menus = extract_menus()            # ← votre fonction existante
+    df_menus = df_menus.dropna(subset=["Date"]).copy()
+    df_menus["Date"] = pd.to_datetime(df_menus["Date"]).dt.date
+
+    # Dernière date de passage pour chaque recette
+    derniere_utilisation = (
+        df_menus.groupby("Recette")["Date"]
+        .max()
+        .to_dict()
+    )
+
+    # 2. Filtre Notion pour la saison et le type de plat
+    filtre_notion = {
+        "and": [
+            {"property": "Elément parent", "relation": {"is_empty": True}},
+            {"or": [
+                {"property": "Saison", "multi_select": {"contains": "Toute l'année"}},
+                {"property": "Saison", "multi_select": {"contains": saison_filtre}},
+                {"property": "Saison", "multi_select": {"is_empty": True}}
+            ]},
+            {"or": [
+                {"property": "Type_plat", "multi_select": {"contains": "Salade"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Soupe"}},
+                {"property": "Type_plat", "multi_select": {"contains": "Plat"}}
+            ]}
+        ]
+    }
+
+    # 3. Parcours des pages Recette
+    rows = []
+    for page in paginate(ID_RECETTES, filter=filtre_notion):
+        pr = page["properties"]
+
+        # ID recette (UID Notion ou relation) – servira au filtrage anti-répétition
+        id_recette = _prop_val(pr.get("ID_Recette"), "uid")
+        if not id_recette:
+            id_recette = page["id"]   # fallback : page_id
+
+        # 3.a – Anti-répétition : on saute si la recette a été servie après la limite
+        last_seen = derniere_utilisation.get(id_recette)
+        if last_seen and last_seen >= limite_date:
+            continue  # exclue : trop récente
+
+        # 3.b – Construction de la ligne
+        row = [page["id"]]
+        # mapping colonne → (clé notion, helper)
+        mapping = {
+            "Nom": ("Nom_plat", "title"),
+            "ID_Recette": ("ID_Recette", "uid"),
+            "Saison": ("Saison", "ms"),
+            "Calories": ("Calories Recette", "roll"),
+            "Proteines": ("Proteines Recette", "roll"),
+            "Temps_total": ("Temps_total", "form"),
+            "Aime_pas_princip": ("Aime_pas_princip", "rollstr"),
+            "Type_plat": ("Type_plat", "ms"),
+            "Transportable": ("Transportable", "selcb")
+        }
+        for col in HDR_RECETTES[1:]:
+            key, kind = mapping[col]
+            row.append(_prop_val(pr.get(key), kind))
+
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=HDR_RECETTES)
+
+
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
