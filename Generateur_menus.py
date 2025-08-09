@@ -196,6 +196,17 @@ def extract_ingr_rec():
             ])
     return pd.DataFrame(rows,columns=HDR_IR)
 
+def to_excel(df):
+    """
+    Convertit un DataFrame pandas en un objet Excel.
+    """
+    from io import BytesIO
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='DonnéesMenus')
+    processed_data = output.getvalue()
+    return processed_data
+
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
@@ -1375,6 +1386,22 @@ def load_notion_data(saison_filtre_selection):
         "Ingredients": df_ingredients,
         "Ingredients_recettes": df_ingredients_recettes
     }
+
+if st.button("Télécharger les menus historiques"):
+    df_menus = extract_menus()
+    if not df_menus.empty:
+        # Prépare les données pour le téléchargement
+        excel_data = to_excel(df_menus)
+
+        # Crée le bouton de téléchargement Streamlit
+        st.download_button(
+            label="Télécharger les menus",
+            data=excel_data,
+            file_name=f"Menus_Historique_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Aucune donnée de menu à télécharger.")
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
