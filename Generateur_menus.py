@@ -661,11 +661,21 @@ class MenuGenerator:
         logger.debug(f"--- Recherche de candidats pour {date_repas.strftime('%Y-%m-%d %H:%M')} (Participants: {participants_str_codes}) ---")
 
         for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
-            nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
-
-            if recette_id_str_cand in exclure_recettes_ids:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
-                continue
+                    nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
+        
+                    if recette_id_str_cand in exclure_recettes_ids:
+                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
+                        continue
+        
+                    # NOUVEAU : Vérification de la non-répétition de la recette sur 42 jours
+                    if self.est_recente(recette_id_str_cand, date_repas):
+                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Répétition trop récente.")
+                        continue
+                    
+                    # NOUVEAU : Vérification de la réutilisation des ingrédients
+                    if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
+                        # La méthode est_intervalle_respecte gère déjà le message de log
+                        continue
 
             # Vérification du mot-clé
             mot_cle_recette = nom_recette_cand.split()[0].lower()
@@ -720,12 +730,6 @@ class MenuGenerator:
                 continue
             
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
-                continue
-            
-            if self.est_recente(recette_id_str_cand, date_repas):
-                continue
-            
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
                 continue
 
             score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
@@ -1712,7 +1716,39 @@ def main():
                 )
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses alternative.")
-
-
+    def to_csv_string(df):
+        """Convertit un DataFrame en une chaîne de caractères CSV."""
+        return df.to_csv(index=False).encode('utf-8')
+    
+    # Dans votre fonction principale, après avoir chargé les DataFrames
+    # (e.g., df_recettes, df_menus_hist, df_ingredients)
+    
+    if st.button("Télécharger les données des Recettes"):
+        csv_recettes = to_csv_string(df_recettes)
+        st.download_button(
+            label="Cliquer pour télécharger les recettes",
+            data=csv_recettes,
+            file_name='notion_recettes.csv',
+            mime='text/csv'
+        )
+    
+    if st.button("Télécharger les données des Menus Historiques"):
+        csv_menus = to_csv_string(df_menus_hist)
+        st.download_button(
+            label="Cliquer pour télécharger l'historique des menus",
+            data=csv_menus,
+            file_name='notion_menus_historiques.csv',
+            mime='text/csv'
+        )
+        
+    if st.button("Télécharger les données des Ingrédients"):
+        csv_ingredients = to_csv_string(df_ingredients)
+        st.download_button(
+            label="Cliquer pour télécharger les ingrédients",
+            data=csv_ingredients,
+            file_name='notion_ingredients.csv',
+            mime='text/csv'
+        )
+        
 if __name__ == "__main__":
     main()
