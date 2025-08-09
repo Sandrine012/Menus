@@ -591,42 +591,42 @@ class MenuGenerator:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
-def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
-    try:
-        ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
-        for ing in ingredients_recette:
-            ing_id_str = str(ing.get("Ingrédient ok"))
-            if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
-            intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
-            if intervalle_jours <= 0:
-                continue
-            
-            df_hist = self.menus_history_manager.df_menus_historique
-            if df_hist.empty: continue
-            
-            # Recherche des recettes utilisant cet ingrédient
-            df_ir = self.recette_manager.df_ingredients_recettes
-            recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
-            
-            if not recettes_utilisant_ing.empty:
-                recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
+    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
+        try:
+            ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
+            for ing in ingredients_recette:
+                ing_id_str = str(ing.get("Ingrédient ok"))
+                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
+                intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
+                if intervalle_jours <= 0:
+                    continue
                 
-                debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
+                df_hist = self.menus_history_manager.df_menus_historique
+                if df_hist.empty: continue
                 
-                # Vérifie si une recette utilisant l'ingrédient a été utilisée dans l'intervalle
-                mask_hist = (
-                    (df_hist['Date'] >= debut_intervalle) &
-                    (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
-                )
+                # Recherche des recettes utilisant cet ingrédient
+                df_ir = self.recette_manager.df_ingredients_recettes
+                recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
                 
-                if not df_hist.loc[mask_hist].empty:
-                    nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
-                    logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
-                    return False
-        return True
-    except Exception as e:
-        logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
-        return True
+                if not recettes_utilisant_ing.empty:
+                    recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
+                    
+                    debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
+                    
+                    # Vérifie si une recette utilisant l'ingrédient a été utilisée dans l'intervalle
+                    mask_hist = (
+                        (df_hist['Date'] >= debut_intervalle) &
+                        (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
+                    )
+                    
+                    if not df_hist.loc[mask_hist].empty:
+                        nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
+                        logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
+                        return False
+            return True
+        except Exception as e:
+            logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
+            return True
 
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str): return 1
