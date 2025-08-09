@@ -120,29 +120,83 @@ def extract_recettes(saison_filtre):
         rows.append(row)
     return pd.DataFrame(rows,columns=HDR_RECETTES)
 
-HDR_MENUS = ["Nom Menu","Recette","Date"]
-def extract_menus():
-    rows=[]
-    for p in paginate(ID_MENUS,
-            filter={"property":"Recette","relation":{"is_not_empty":True}}):
-        pr = p["properties"]
-        nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
-        rec_ids=[]
-        rel=pr["Recette"]
-        if rel["type"]=="relation":
-            rec_ids=[r["id"] for r in rel["relation"]]
-        else:
-            for it in rel["rollup"]["array"]:
-                rec_ids.extend([it.get("id")] if it.get("id") else
-                               [r["id"] for r in it.get("relation",[])])
-        d=""
-        if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
-            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00"))
-        rows.append([nom.strip(), ", ".join(rec_ids), d])
-    return pd.DataFrame(rows,columns=HDR_MENUS)
+HDR_MENUS = ["Nom Menu", "Recette", "Date"]
 
-# Ajout de la colonne "Intervalle" pour les ingrédients.
-HDR_INGR = ["Page_ID","Nom","Type de stock","unité","Qte reste", "Intervalle"]
+def extract_menus(client, database_id):
+    """
+    Récupère les pages de la base « Menus » sur Notion et renvoie un DataFrame
+    structuré pour l’historique.
+
+    Paramètres
+    ----------
+    client : notion_client.Client
+        Instance authentifiée du SDK Notion.
+    database_id : str
+        ID de la base « Menus ».
+
+    Retour
+    ------
+    pandas.DataFrame
+        Colonnes : 'Nom Menu', 'Recette', 'Date'
+    """
+    rows = []
+    next_cursor = None
+
+    while True:
+        resp = client.databases.query(
+            database_id=database_id,
+            start_cursor=next_cursor,
+            page_size=100,                    # taille de page raisonnable
+        )
+
+        for page in resp["results"]:
+            props = page["properties"]
+
+            # 1. Nom du menu
+            nom_menu = "".join(
+                t["plain_text"] for t in props["Nom Menu"]["title"]
+            ).strip()
+
+            # 2. ID de recette (on ne garde que le premier ID trouvé)
+            recette_id = ""
+            rel_prop = props.get("Recette")
+            if rel_prop:                       # relation ou roll-up
+                if rel_prop["type"] == "relation":
+                    if rel_prop["relation"]:
+                        recette_id = rel_prop["relation"][0]["id"]
+                elif rel_prop["type"] == "rollup":
+                    for item in rel_prop["rollup"].get("array", []):
+                        if item.get("id"):         # page liée
+                            recette_id = item["id"]
+                            break
+                        if item.get("relation"):   # relation imbriquée
+                            recette_id = item["relation"][0]["id"]
+                            break
+            # on ignore la page si aucune recette
+            if recette_id == "":
+                continue
+
+            # 3. Date du repas
+            date_val = pd.NaT
+            date_prop = props.get("Date", {}).get("date", {})
+            if date_prop and date_prop.get("start"):
+                iso_str = date_prop["start"].replace("Z", "+00:00")
+                date_val = datetime.fromisoformat(iso_str).date()
+
+            rows.append([nom_menu, recette_id, date_val])
+
+        if not resp.get("has_more"):
+            break
+        next_cursor = resp.get("next_cursor")
+
+    df = pd.DataFrame(rows, columns=HDR_MENUS)
+    # on retire les lignes sans date
+    df.dropna(subset=["Date"], inplace=True)
+    # conversion finale au bon type
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    return df
+    
 def extract_ingredients():
     rows=[]
     for p in paginate(ID_INGREDIENTS):
