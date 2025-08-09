@@ -588,12 +588,19 @@ class MenuGenerator:
             return set()
     
     def est_recente(self, recette_id, date_actuelle):
+        # on récupère l’historique complet
+        df_hist = self.menus_history_manager.df_menus_historique
+    
+        # fenêtre d’exclusion symétrique ±NB_JOURS_ANTI_REPETITION
         debut = date_actuelle - timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
         fin   = date_actuelle + timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-        mask  = (df_hist['Recette'].astype(str) == str(recette_id)) & \
-                (df_hist['Date'] >= debut) & (df_hist['Date'] <= fin)
+    
+        mask = (
+            (df_hist["Recette"].astype(str) == str(recette_id)) &
+            (df_hist["Date"] >= debut) &
+            (df_hist["Date"] <= fin)
+        )
         return not df_hist.loc[mask].empty
-
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         # ... (Cette méthode reste inchangée)
