@@ -1495,6 +1495,23 @@ def main():
             try:
                 notion_data = load_notion_data(saison_selectionnee)
                 dataframes.update(notion_data)
+
+                # ─── 0. Charger et afficher l’historique avant la planification ───
+                with st.expander("📜 Historique Notion – 10 dernières entrées (avant planification)"):
+                    try:
+                        df_hist_menus = extract_menus()            # appel existant
+                        if df_hist_menus.empty:
+                            st.info("Aucun menu récupéré depuis Notion.")
+                        else:
+                            df_aff = (
+                                df_hist_menus
+                                .sort_values("Date", ascending=False)  # plus récents d’abord
+                                .head(10)                              # n’en montrer que 10
+                            )
+                            st.dataframe(df_aff, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Erreur lors de l’extraction des menus : {e}")
+
             except Exception as e:
                 st.error(f"Erreur lors de la récupération des données depuis Notion : {e}")
                 return
