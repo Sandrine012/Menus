@@ -644,7 +644,7 @@ class MenuGenerator:
         # ... (Cette méthode reste inchangée)
         return self.menus_history_manager.recettes_historique_counts.get(recette_id, 0)
     
-    def generer_recettes_candidates(
+def generer_recettes_candidates(
     self,
     date_repas,
     participants_str_codes,
@@ -654,10 +654,10 @@ class MenuGenerator:
     nutrition_req,
     exclure_recettes_ids=None,
     ingredients_utilises_cette_semaine=None):
-        if exclure_recettes_ids is None:
-            exclure_recettes_ids = set()
-        if ingredients_utilises_cette_semaine is None:
-            ingredients_utilises_cette_semaine = {}
+    if exclure_recettes_ids is None:
+        exclure_recettes_ids = set()
+    if ingredients_utilises_cette_semaine is None:
+        ingredients_utilises_cette_semaine = {}
 
     candidates = []
     anti_gaspi_candidates = []
@@ -731,7 +731,23 @@ class MenuGenerator:
         recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
 
         candidates.append(recette_id_str_cand)
-        if self.recette_manager.recette_utilise_ingredient_anti :
+        if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand):
+            anti_gaspi_candidates.append(recette_id_str_cand)
+
+    if not candidates:
+        return [], {}
+
+    if exclure_recettes_ids:
+        candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
+    else:
+        candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+    anti_gaspi_triees = sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
+
+    if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
+        return anti_gaspi_triees[:5], recettes_ingredients_manquants
+
+    return candidates_triees[:10], recettes_ingredients_manquants
+
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
     if exclure_recettes_ids is None:
