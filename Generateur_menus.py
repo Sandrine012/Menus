@@ -1620,12 +1620,7 @@ def main():
                 )
             else:
                 st.info("Aucun ingrédient manquant identifié pour la liste de courses alternative.")
-                
-        st.subheader("Aperçu de l'historique des menus (5 dernières lignes)")
-        st.dataframe(
-            menu_generator_realiste.menus_history_manager.df_menus_historique.tail(),
-            use_container_width=True
-        )
+            
     
 
 if __name__ == "__main__":
