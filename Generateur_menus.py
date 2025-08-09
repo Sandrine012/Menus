@@ -520,20 +520,8 @@ class MenusHistoryManager:
             logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
             self.recettes_historique_counts = {}
 
-    def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
-        """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
-        try:
-            df_hist = self.df_menus_historique
-            if df_hist.empty or intervalle_jours <= 0:
-                return False
 
-            debut = date_actuelle - timedelta(days=intervalle_jours + 1)
-            
-            return False # Placeholder
-        except Exception as e:
-            logger.error(f"Erreur dans is_ingredient_recent pour {ingredient_id_str}: {e}")
-            return False
-
+    
 class MenuGenerator:
     """Génère les menus en fonction du planning et des règles."""
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
