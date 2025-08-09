@@ -523,7 +523,10 @@ class MenusHistoryManager:
     
             self.df_menus_historique["Date"] = self.df_menus_historique["Date"].apply(parse_date)
             self.df_menus_historique.dropna(subset=["Date"], inplace=True)
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"])
+            self.df_menus_historique["Date"] = pd.to_datetime(
+                self.df_menus_historique["Date"]
+            ).dt.normalize()            # ← met l’heure à 00:00:00
+
     
             if 'Date' in self.df_menus_historique.columns:
                 self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
@@ -599,8 +602,10 @@ class MenuGenerator:
                 return False
     
             delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            debut_fenetre = date_actuelle - delta
-            fin_fenetre   = date_actuelle          # borné au jour du repas
+            dt_ref = pd.to_datetime(date_actuelle).normalize()   # ← enlève l’heure
+            debut_fenetre = dt_ref - delta
+            fin_fenetre   = dt_ref
+
     
             dates_recette = df_hist[
                 df_hist["Recette"].astype(str) == str(recette_id)
