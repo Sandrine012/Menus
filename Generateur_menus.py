@@ -1387,21 +1387,21 @@ def load_notion_data(saison_filtre_selection):
         "Ingredients_recettes": df_ingredients_recettes
     }
 
-if st.button("Télécharger les menus historiques"):
-    df_menus = extract_menus()
-    if not df_menus.empty:
-        # Prépare les données pour le téléchargement
-        excel_data = to_excel(df_menus)
+st.write("---") # Pour une meilleure séparation visuelle
 
-        # Crée le bouton de téléchargement Streamlit
-        st.download_button(
-            label="Télécharger les menus",
-            data=excel_data,
-            file_name=f"Menus_Historique_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.warning("Aucune donnée de menu à télécharger.")
+# Extraire les menus de Notion dans un DataFrame
+df_menus = extract_menus()
+
+if not df_menus.empty:
+    csv = df_menus.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Télécharger l'historique des menus",
+        data=csv,
+        file_name='historique_menus.csv',
+        mime='text/csv',
+    )
+else:
+    st.warning("Aucune donnée de menu à télécharger.")
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
