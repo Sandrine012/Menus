@@ -1435,6 +1435,7 @@ def main():
                     ne_pas_decrementer_stock=False,
                     params=params
                 )
+                st.session_state['menu_generator_realiste'] = menu_generator_realiste
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
@@ -1515,6 +1516,7 @@ def main():
                     ne_pas_decrementer_stock=False,
                     params=params
                 )
+                st.session_state['menu_generator_realiste'] = menu_generator_realiste
                 df_menu_realiste, liste_courses_realiste = menu_generator_realiste.generer_menu(mode='realiste')
                 st.session_state['df_menu_realiste'] = df_menu_realiste
                 st.session_state['liste_courses_realiste'] = liste_courses_realiste
