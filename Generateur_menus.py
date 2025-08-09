@@ -124,7 +124,7 @@ HDR_MENUS = ["Nom Menu","Recette","Date"]
 def extract_menus():
     rows=[]
     for p in paginate(ID_MENUS,
-             filter={"property":"Recette","relation":{"is_not_empty":True}}):
+            filter={"property":"Recette","relation":{"is_not_empty":True}}):
         pr = p["properties"]
         nom = "".join(t["plain_text"] for t in pr["Nom Menu"]["title"])
         rec_ids=[]
@@ -197,74 +197,6 @@ def extract_ingr_rec():
     return pd.DataFrame(rows,columns=HDR_IR)
 
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
-
-# ==============================================================================
-# EXTRACTION DES DONNÉES DEPUIS NOTION
-# ==============================================================================
-
-logger.info('Extraction des recettes.')
-df_recettes = extract_recettes(saison_filtre) 
-
-logger.info('Extraction de l\'historique des menus.')
-df_menus_hist = extract_menus()
-
-logger.info('Extraction des ingrédients.')
-df_ingredients = extract_ingredients()
-
-logger.info('Extraction des liens ingrédients-recettes.')
-df_ingredients_recettes = extract_ingr_rec()
-
-# ==============================================================================
-# PROPOSITION DE MODIFICATION : FILTRAGE DES RECETTES UTILISÉES RÉCEMMENT
-# ==============================================================================
-logger.info("Début du filtrage des recettes utilisées il y a moins de 42 jours.")
-
-# 1. Assurez-vous que la colonne 'Date' du planning est au format datetime
-if not pd.api.types.is_datetime64_any_dtype(df_planning['Date']):
-    df_planning['Date'] = pd.to_datetime(df_planning['Date'], format='%d/%m/%Y', errors='coerce')
-
-# 2. Obtenez la première date du planning
-first_planning_date = df_planning['Date'].min()
-
-# 3. Calculez la date de coupure (42 jours avant la première date du planning)
-cutoff_date = first_planning_date - timedelta(days=NB_JOURS_ANTI_REPETITION_DEFAULT)
-
-# 4. Identifiez les ID des recettes utilisées après la date de coupure
-recent_recipe_ids = set()
-for _, row in df_menus_hist.iterrows():
-    if row['Date'] and row['Date'] >= cutoff_date and row['Recette']:
-        recipe_ids = row['Recette'].split(', ')
-        recent_recipe_ids.update(recipe_ids)
-
-# 5. Filtrez le DataFrame des recettes pour exclure celles utilisées récemment
-# Créez une copie pour éviter les avertissements de modification de slice
-df_recettes_filtered = df_recettes[~df_recettes['Page_ID'].isin(recent_recipe_ids)].copy()
-
-# Affichez un message de confirmation pour le débogage
-logger.info(f"{len(df_recettes) - len(df_recettes_filtered)} recettes ont été exclues car utilisées récemment (moins de {NB_JOURS_ANTI_REPETITION_DEFAULT} jours).")
-# ==============================================================================
-# FIN DE LA MODIFICATION
-# ==============================================================================
-
-# ==============================================================================
-# PRÉPARATION DES DONNÉES ET CRÉATION DE L'INSTANCE MENUGENERATOR
-# ==============================================================================
-
-# Assurez-vous que les DataFrames sont correctement formatés
-df_recettes_filtered.set_index(COLONNE_ID_RECETTE, inplace=True)
-df_menus_hist = flatten_menus_dataframe(df_menus_hist)
-df_menus_hist = df_menus_hist[df_menus_hist['Date'].notna()]
-
-# Gestion des dates
-df_menus_hist['Date'] = pd.to_datetime(df_menus_hist['Date'], format='%Y-%m-%d', errors='coerce')
-df_menus_hist = df_menus_hist.sort_values(by='Date', ascending=False).reset_index(drop=True)
-
-# Les deux lignes suivantes sont essentielles pour que le code fonctionne correctement, ne pas les modifier
-df_ingredients.rename(columns={'ID': 'ID_INGREDIENT'}, inplace=True)
-df_ingredients_recettes.rename(columns={'ID': 'ID_INGREDIENT_RECETTE'}, inplace=True)
-
-# Création du générateur de menus avec le DataFrame de recettes filtré
-menu_generator = MenuGenerator(df_menus_hist, df_recettes_filtered, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params)
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
     """Vérifie si toutes les colonnes attendues sont présentes dans le DataFrame."""
