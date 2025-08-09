@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import random
@@ -137,7 +136,7 @@ def extract_menus():
                                [r["id"] for r in it.get("relation",[])])
         d=""
         if pr["Date"]["date"] and pr["Date"]["date"]["start"]:
-            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).isoformat()
+            d=datetime.fromisoformat(pr["Date"]["date"]["start"].replace("Z","+00:00")).strftime("%Y-%m-%d")
         rows.append([nom.strip(), ", ".join(rec_ids), d])
     return pd.DataFrame(rows,columns=HDR_MENUS)
 
@@ -511,15 +510,15 @@ class RecetteManager:
 class MenusHistoryManager:
     """Gère l'accès et les opérations sur l'historique des menus."""
     def __init__(self, df_menus_hist):
-            self.df_menus_historique = df_menus_hist.copy()
-            self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], format='%d/%m/%Y', errors="coerce")
-            self.df_menus_historique.dropna(subset=["Date"], inplace=True)
-            if 'Date' in self.df_menus_historique.columns:
-                self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
-                self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
-            else:
-                logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
-                self.recettes_historique_counts = {}
+        self.df_menus_historique = df_menus_hist.copy()
+        self.df_menus_historique["Date"] = pd.to_datetime(self.df_menus_historique["Date"], errors="coerce")
+        self.df_menus_historique.dropna(subset=["Date"], inplace=True)
+        if 'Date' in self.df_menus_historique.columns:
+            self.df_menus_historique['Semaine'] = self.df_menus_historique['Date'].dt.isocalendar().week
+            self.recettes_historique_counts = self.df_menus_historique['Recette'].value_counts().to_dict()
+        else:
+            logger.warning("La colonne 'Date' est manquante dans l'historique des menus, impossible de calculer la semaine.")
+            self.recettes_historique_counts = {}
 
     def is_ingredient_recent(self, ingredient_id_str, date_actuelle, intervalle_jours):
         """Vérifie si un ingrédient a été consommé dans l'intervalle de jours spécifié."""
@@ -540,8 +539,7 @@ class MenuGenerator:
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            # Correction : Spécifiez le format de date
-            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], format='%d/%m/%Y', errors='coerce')
+            self.df_planning['Date'] = pd.to_datetime(self.df_planning['Date'], errors='coerce')
             self.df_planning.dropna(subset=['Date'], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
@@ -1055,22 +1053,18 @@ def add_menu_to_notion(df_menu, notion_db_id):
         nom_plat = row.get(COLONNE_NOM)
         participants = row.get('Participant(s)')
         date_str = row.get('Date')
-        
+
         if not date_str:
             st.warning(f"Date invalide pour la ligne : {nom_plat}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
-        
+            
         try:
-            # Ici on parse date_str complet avec datetime, en considérant qu'il contient heure (ex: '2025-08-07 08:00')
-            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M')
-            # On convertit en isoformat complet
-            date_notion = dt.isoformat()  # Ex: '2025-08-07T08:00:00'
+            date_notion = datetime.strptime(date_str.split(' ')[0], '%Y-%m-%d').date().isoformat()
         except ValueError:
             st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
             failure_count += 1
             continue
-
         
         # Le dictionnaire des propriétés de la page
         new_page_properties = {
@@ -1225,6 +1219,7 @@ def main():
 
     st.sidebar.header("Fichiers de données")
     
+    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
     
     uploaded_files = {}
     uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
