@@ -587,25 +587,31 @@ class MenuGenerator:
             logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
             return set()
     
-    def est_recente(self, recette_id, date_reference):
+    def est_recente(self, recette_id:str, date_actuelle:datetime):
         """
-        Retourne True si la recette apparaît dans l’historique
-        entre date_reference - Δ et date_reference + Δ
-        (Δ = NB_JOURS_ANTI_REPETITION).
+        Renvoie True si la recette apparaît dans l’historique
+        sur la période [date_actuelle – Δ ; date_actuelle] où
+        Δ = NB_JOURS_ANTI_REPETITION (42 jours par défaut).
         """
-        df_hist = self.menus_history_manager.df_menus_historique
-        if df_hist.empty:
+        try:
+            df_hist = self.menus_history_manager.df_menus_historique
+            if df_hist.empty:
+                return False
+    
+            delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            debut_fenetre = date_actuelle - delta
+            fin_fenetre   = date_actuelle          # borné au jour du repas
+    
+            dates_recette = df_hist[
+                df_hist["Recette"].astype(str) == str(recette_id)
+            ]["Date"]
+    
+            # True ⇨ la recette figure déjà entre (date − 42 j) et (date)
+            return any(debut_fenetre <= d <= fin_fenetre for d in dates_recette)
+        except Exception as e:
+            logger.error(f"est_recente() : {e}")
             return False
-    
-        delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-        debut_fenetre = date_reference - delta
-        fin_fenetre   = date_reference + delta
-    
-        dates_recette = df_hist[
-            df_hist["Recette"].astype(str) == str(recette_id)
-        ]["Date"]
-    
-        return any(debut_fenetre <= d <= fin_fenetre for d in dates_recette)
+
 
     def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
         # ... (Cette méthode reste inchangée)
