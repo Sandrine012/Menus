@@ -662,118 +662,102 @@ class MenuGenerator:
         # ... (Cette méthode reste inchangée)
         return self.menus_history_manager.recettes_historique_counts.get(recette_id, 0)
     
-    def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None, ingredients_utilises_cette_semaine=None):
-        if exclure_recettes_ids is None:
-            exclure_recettes_ids = set()
-        # Le dictionnaire `ingredients_utilises_cette_semaine` est un mapping de {ing_id: date_utilisation}
-        if ingredients_utilises_cette_semaine is None:
-            ingredients_utilises_cette_semaine = {}
+def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None, ingredients_utilises_cette_semaine=None):
+    if exclure_recettes_ids is None:
+        exclure_recettes_ids = set()
+    if ingredients_utilises_cette_semaine is None:
+        ingredients_utilises_cette_semaine = {}
 
-        candidates = []
-        anti_gaspi_candidates = []
-        recettes_scores_dispo = {}
-        recettes_ingredients_manquants = {}
+    candidates = []
+    anti_gaspi_candidates = []
+    recettes_scores_dispo = {}
+    recettes_ingredients_manquants = {}
 
-        nb_personnes = self.compter_participants(participants_str_codes)
+    nb_personnes = self.compter_participants(participants_str_codes)
 
-        logger.debug(f"--- Recherche de candidats pour {date_repas.strftime('%Y-%m-%d %H:%M')} (Participants: {participants_str_codes}) ---")
+    logger.debug(f"--- Recherche de candidats pour {date_repas.strftime('%Y-%m-%d %H:%M')} (Participants: {participants_str_codes}) ---")
 
-        for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
-            nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
+    # Créez une liste complète des recettes à exclure au début pour optimiser la boucle.
+    recettes_recentes = {recette_id for recette_id in self.recette_manager.df_recettes.index if self.est_recente(recette_id, date_repas)}
+    recettes_a_exclure_totales = exclure_recettes_ids.union(used_recipes_in_current_gen).union(recettes_recentes)
 
-            if recette_id_str_cand in exclure_recettes_ids:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
-                continue
+    for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
+        # --------------------------------------------------------------------------------------------------
+        # FILTRES PRÉCOCES (PLUS EFFICACES)
+        # --------------------------------------------------------------------------------------------------
+        nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
 
-            # Vérification du mot-clé
-            mot_cle_recette = nom_recette_cand.split()[0].lower()
-            if mot_cle_recette in self.mots_cles_selectionnes_semaine:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
-                continue
+        # Filtre 1 : Recettes exclues (42 jours, déjà dans le menu, ou par le menu optimal)
+        if recette_id_str_cand in recettes_a_exclure_totales:
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu (récent, déjà utilisé ou par menu optimal).")
+            continue
 
-            # NOUVEAU: Vérification des ingrédients en fonction de leur intervalle
-            ingredients_recette_cand = {i.get("Ingrédient ok") for i in self.recette_manager.get_ingredients_for_recipe(recette_id_str_cand) if i.get("Ingrédient ok")}
-            is_interval_ok = True
-            noms_ingredients_communs = []
-            for ing_id in ingredients_recette_cand:
-                if ing_id in ingredients_utilises_cette_semaine:
-                    date_derniere_utilisation = ingredients_utilises_cette_semaine[ing_id]
-                    jours_ecoules = (date_repas - date_derniere_utilisation).days
-                    
-                    intervalle_jrs_ing = self.recette_manager.get_intervalle_ingredient(ing_id)
-                    
-                    if intervalle_jrs_ing is not None and jours_ecoules < intervalle_jrs_ing:
-                        noms_ingredients_communs.append(self.recette_manager.obtenir_nom_ingredient_par_id(ing_id))
-                        is_interval_ok = False
-                        break
-            
-            if not is_interval_ok:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Contient un ingrédient déjà utilisé trop récemment ({', '.join(noms_ingredients_communs)}).")
-                continue
+        # Filtre 2 : Mot-clé déjà utilisé cette semaine
+        mot_cle_recette = nom_recette_cand.split()[0].lower()
+        if mot_cle_recette in self.mots_cles_selectionnes_semaine:
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
+            continue
 
-            if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
-                continue
+        # Filtre 3 : Adaptation aux participants (aime pas)
+        if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
+            continue
 
-            temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
-            if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({self.params['TEMPS_MAX_EXPRESS']} min).")
-                continue
-            if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({self.params['TEMPS_MAX_RAPIDE']} min).")
-                continue
+        # Filtre 4 : Transportable (si la demande le requiert)
+        if transportable_req and not self.recette_manager.est_transportable(recette_id_str_cand):
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
+            continue
 
-            if nutrition_req == "équilibré":
-                try:
-                    calories = self.recette_manager.obtenir_calories(recette_id_str_cand)
-                    if calories > self.params['REPAS_EQUILIBRE']:
-                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({self.params['REPAS_EQUILIBRE']}).")
-                        continue
-                except Exception:
-                    logger.debug(f"Calories non valides/trouvées pour {nom_recette_cand} ({recette_id_str_cand}) (filtre nutrition).")
+        # Filtre 5 : Temps de préparation
+        temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
+        if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']:
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({self.params['TEMPS_MAX_EXPRESS']} min).")
+            continue
+        if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']:
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({self.params['TEMPS_MAX_RAPIDE']} min).")
+            continue
+
+        # Filtre 6 : Nutrition
+        if nutrition_req == "équilibré":
+            try:
+                calories = self.recette_manager.obtenir_calories(recette_id_str_cand)
+                if calories > self.params['REPAS_EQUILIBRE']:
+                    logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({self.params['REPAS_EQUILIBRE']}).")
                     continue
-            
-            if recette_id_str_cand in used_recipes_in_current_gen:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Déjà utilisé dans la génération actuelle.")
+            except Exception:
+                logger.debug(f"Calories non valides/trouvées pour {nom_recette_cand} ({recette_id_str_cand}) (filtre nutrition).")
                 continue
+        
+        # Filtre 7 : Respect de l'intervalle des ingrédients
+        if not self.est_intervalle_respecte(recette_id_str_cand, date_repas, ingredients_utilises_cette_semaine):
+            continue
+
+        # --------------------------------------------------------------------------------------------------
+        # Évaluation des candidats restants
+        # --------------------------------------------------------------------------------------------------
+        score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
+        recettes_scores_dispo[recette_id_str_cand] = score_dispo
+        recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
+        candidates.append(recette_id_str_cand)
+        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) ajouté: Score dispo {score_dispo:.2f}, {pourcentage_dispo:.0f}% d'ingrédients. Manquants: {len(manquants_pour_cette_recette)}")
+
+        if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand):
+            anti_gaspi_candidates.append(recette_id_str_cand)
+            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) est aussi anti-gaspi.")
+
+    if not candidates:
+        logger.debug("Aucun candidat trouvé après le filtrage initial.")
+        return [], {}
+
+    # Prioriser les candidats anti-gaspi si leur score de disponibilité est suffisant
+    if anti_gaspi_candidates and recettes_scores_dispo.get(anti_gaspi_candidates[0], -1) >= 0.5:
+        logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_candidates[0], -1):.2f}).")
+        return sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)[:5], recettes_ingredients_manquants
+    
+    # Sinon, trier tous les candidats par leur score de disponibilité
+    candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
             
-            if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
-                continue
-            
-            if self.est_recente(recette_id_str_cand, date_repas):
-                continue
-            
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
-                continue
-
-            score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
-            recettes_scores_dispo[recette_id_str_cand] = score_dispo
-            recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
-            candidates.append(recette_id_str_cand)
-            logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) ajouté: Score dispo {score_dispo:.2f}, {pourcentage_dispo:.0f}% d'ingrédients. Manquants: {len(manquants_pour_cette_recette)}")
-
-            if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand):
-                anti_gaspi_candidates.append(recette_id_str_cand)
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) est aussi anti-gaspi.")
-
-
-        if not candidates:
-            logger.debug("Aucun candidat trouvé après le filtrage initial.")
-            return [], {}
-
-        if exclure_recettes_ids:
-            candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
-        else:
-            candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
-            
-        anti_gaspi_triees = sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
-
-        if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
-            logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_triees[0], -1):.2f}).")
-            return anti_gaspi_triees[:5], recettes_ingredients_manquants
-            
-        logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
-        return candidates_triees[:10], recettes_ingredients_manquants
+    logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
+    return candidates_triees[:10], recettes_ingredients_manquants
 
 #-----------------------------------------------------------------------------------------------------------------------------#
 
