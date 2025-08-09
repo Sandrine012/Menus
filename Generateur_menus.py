@@ -731,7 +731,7 @@ class MenuGenerator:
         recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
 
         candidates.append(recette_id_str_cand)
-        if self.recette_manager.recette_utilise_ingredient_anti
+        if self.recette_manager.recette_utilise_ingredient_anti :
 
     def generer_menu(self, mode, exclure_recettes_ids=None):
     if exclure_recettes_ids is None:
