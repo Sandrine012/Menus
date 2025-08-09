@@ -665,6 +665,17 @@ class MenuGenerator:
     def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
         # ... (Cette méthode reste inchangée)
         return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
+
+
+    def _get_historical_frequency(self, recette_id_str):
+        """
+        Calcule la fréquence historique d'une recette.
+        """
+        try:
+            return self.menus_history_manager.recettes_historique_counts.get(recette_id_str, 0)
+        except Exception as e:
+            logger.error(f"Erreur lors du calcul de la fréquence historique pour {recette_id_str}: {e}")
+            return 0
     
     def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None, ingredients_utilises_cette_semaine=None):
         if exclure_recettes_ids is None:
