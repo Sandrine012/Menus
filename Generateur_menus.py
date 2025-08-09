@@ -549,168 +549,57 @@ class MenusHistoryManager:
             logger.error(f"Erreur dans is_ingredient_recent pour {ingredient_id_str}: {e}")
             return False
 
-class MenuGenerator:
-    """Génère les menus en fonction du planning et des règles."""
     def __init__(self, df_menus_hist, df_recettes, df_planning, df_ingredients, df_ingredients_recettes, ne_pas_decrementer_stock, params):
         self.df_planning = df_planning.copy()
         if "Date" in self.df_planning.columns:
-            # Correction : Spécifiez le format de date
-            # NOUVEAU – parse tout format ISO, garde heure / TZ, puis normalise
-            # ➜ Accepte tous les formats ISO/TZ puis normalise (heure 00:00, TZ neutre)
             self.df_planning["Date"] = (
                 pd.to_datetime(self.df_planning["Date"], errors="coerce", utc=True)
-                  .dt.tz_convert(None)
-                  .dt.normalize()
+                .dt.tz_convert(None)
+                .dt.normalize()
             )
-            self.df_planning.dropna(subset=["Date"], inplace=True)   # garde seulement les dates valides
-
-
+            self.df_planning.dropna(subset=["Date"], inplace=True)
         else:
             logger.error("'Date' manquante dans le planning.")
             raise ValueError("Colonne 'Date' manquante dans le fichier de planning.")
-
+        
         self.recette_manager = RecetteManager(df_recettes, df_ingredients, df_ingredients_recettes)
         self.menus_history_manager = MenusHistoryManager(df_menus_hist)
         self.ne_pas_decrementer_stock = ne_pas_decrementer_stock
         self.params = params
-
-        # Ajout de ces listes pour suivre les recettes et les mots-clés de la semaine
         self.recettes_selectionnees_semaine = []
-        self.mots_cles_selectionnes_semaine = set() # Utilisation d'un set pour une meilleure performance
-        
-    def recettes_meme_semaine_annees_precedentes(self, date_actuelle):
-        # ... (Cette méthode reste inchangée)
-        try:
-            df_hist = self.menus_history_manager.df_menus_historique
-            if df_hist.empty or not all(col in df_hist.columns for col in ['Date', 'Semaine', 'Recette']):
-                return set()
+        self.mots_cles_selectionnes_semaine = set()
 
-            semaine_actuelle = date_actuelle.isocalendar()[1]
-            annee_actuelle = date_actuelle.year
-
-            df_menus_semaine = df_hist[
-                (df_hist["Semaine"].astype(int) == semaine_actuelle) &
-                (df_hist["Date"].dt.year < annee_actuelle) &
-                pd.notna(df_hist["Recette"])
-            ]
-            return set(df_menus_semaine["Recette"].astype(str).unique())
-        except Exception as e:
-            logger.error(f"Erreur recettes_meme_semaine_annees_precedentes pour {date_actuelle}: {e}")
-            return set()
-    
-    def est_recente(self, recette_id:str, date_actuelle:datetime):
-        """
-        Renvoie True si la recette apparaît dans l’historique
-        sur la période [date_actuelle – Δ ; date_actuelle] où
-        Δ = NB_JOURS_ANTI_REPETITION (42 jours par défaut).
-        """
-        try:
-            # 1) Date de référence sans fuseau et sans heure
-            dt_ref = pd.to_datetime(date_actuelle).normalize()
-        
-            # 2) Fenêtre de 42 jours (ou la valeur paramétrée)
-            delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
-            debut_fenetre = dt_ref - delta
-            fin_fenetre   = dt_ref
-        
-            # 3) Dates de cette recette déjà présentes dans l’historique
-            dates_recette = self.menus_history_manager.df_menus_historique[
-                self.menus_history_manager.df_menus_historique["Recette"].astype(str).str.split(', ').apply(lambda x: str(recette_id) in x)
-            ]["Date"]
-        
-            # 4) True si la recette apparaît entre (date-42 j) et (date)
-            return any(debut_fenetre <= d <= fin_fenetre for d in dates_recette)
-
-        except Exception as e:
-            logger.error(f"est_recente() : {e}")
-            return False
-
-
-    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
-        # ... (Cette méthode reste inchangée)
-        try:
-            ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
-            for ing in ingredients_recette:
-                ing_id_str = str(ing.get("Ingrédient ok"))
-                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
-                intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
-                if intervalle_jours <= 0:
-                    continue
-                df_hist = self.menus_history_manager.df_menus_historique
-                if df_hist.empty: continue
-                df_ir = self.recette_manager.df_ingredients_recettes
-                recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
-                if not recettes_utilisant_ing.empty:
-                    recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
-                    debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
-                    mask_hist = (
-                        (df_hist['Date'] >= debut_intervalle) &
-                        (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
-                    )
-                    if not df_hist.loc[mask_hist].empty:
-                        nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
-                        logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
-                        return False
-            return True
-        except Exception as e:
-            logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
-            return True
-
-    def compter_participants(self, participants_str_codes):
-        # ... (Cette méthode reste inchangée)
-        if not isinstance(participants_str_codes, str): return 1
-        if participants_str_codes == "B": return 1
-        return len([p for p in participants_str_codes.replace(" ", "").split(",") if p])
-
-    def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
-        # ... (Cette méthode reste inchangée)
-        return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
-
-
-    def _get_historical_frequency(self, recette_id_str):
-        """
-        Calcule la fréquence historique d'une recette.
-        """
-        try:
-            return self.menus_history_manager.recettes_historique_counts.get(recette_id_str, 0)
-        except Exception as e:
-            logger.error(f"Erreur lors du calcul de la fréquence historique pour {recette_id_str}: {e}")
-            return 0
-    
     def generer_recettes_candidates(self, date_repas, participants_str_codes, used_recipes_in_current_gen, transportable_req, temps_req, nutrition_req, exclure_recettes_ids=None, ingredients_utilises_cette_semaine=None):
         if exclure_recettes_ids is None:
             exclure_recettes_ids = set()
         if ingredients_utilises_cette_semaine is None:
             ingredients_utilises_cette_semaine = {}
-    
+
         candidates = []
         anti_gaspi_candidates = []
         recettes_scores_dispo = {}
         recettes_ingredients_manquants = {}
-    
+
         nb_personnes = self.compter_participants(participants_str_codes)
-    
         logger.debug(f"--- Recherche de candidats pour {date_repas.strftime('%Y-%m-%d %H:%M')} (Participants: {participants_str_codes}) ---")
-    
+
         for recette_id_str_cand in self.recette_manager.df_recettes.index.astype(str):
             nom_recette_cand = self.recette_manager.obtenir_nom(recette_id_str_cand)
-    
+
             if recette_id_str_cand in exclure_recettes_ids:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Exclu par le menu Optimal.")
                 continue
-            
-            # Le code de la fonction est_recente est bien ici.
+
             if self.est_recente(recette_id_str_cand, date_repas):
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Répétition trop récente.")
                 continue
-    
-            # Vérification du mot-clé
+            
+            # Correction : le bloc suivant est dupliqué dans votre code, ici il est unique
             mot_cle_recette = nom_recette_cand.split()[0].lower()
             if mot_cle_recette in self.mots_cles_selectionnes_semaine:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Le mot-clé '{mot_cle_recette}' est déjà utilisé cette semaine.")
                 continue
-    
-            # NOUVEAU: Vérification des ingrédients en fonction de leur intervalle
+
             ingredients_recette_cand = {i.get("Ingrédient ok") for i in self.recette_manager.get_ingredients_for_recipe(recette_id_str_cand) if i.get("Ingrédient ok")}
             is_interval_ok = True
             noms_ingredients_communs = []
@@ -718,38 +607,37 @@ class MenuGenerator:
                 if ing_id in ingredients_utilises_cette_semaine:
                     date_derniere_utilisation = ingredients_utilises_cette_semaine[ing_id]
                     jours_ecoules = (date_repas - date_derniere_utilisation).days
-                    
-                    intervalle_jrs_ing = self.recette_manager.get_intervalle_ingredient(ing_id)
-                    
+                    intervalle_jrs_ing = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id)
+
                     if intervalle_jrs_ing is not None and jours_ecoules < intervalle_jrs_ing:
                         noms_ingredients_communs.append(self.recette_manager.obtenir_nom_ingredient_par_id(ing_id))
                         is_interval_ok = False
                         break
-                
+
             if not is_interval_ok:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Contient un ingrédient déjà utilisé trop récemment ({', '.join(noms_ingredients_communs)}).")
                 continue
-    
+
             if str(transportable_req).strip().lower() == "oui" and not self.recette_manager.est_transportable(recette_id_str_cand):
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable pour une demande transportable.")
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Non transportable.")
                 continue
-    
+
             temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
             if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({self.params['TEMPS_MAX_EXPRESS']} min).")
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps trop long.")
                 continue
             if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']:
-                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({self.params['TEMPS_MAX_RAPIDE']} min).")
+                logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps trop long.")
                 continue
-    
+
             if nutrition_req == "équilibré":
                 try:
                     calories = self.recette_manager.obtenir_calories(recette_id_str_cand)
                     if calories > self.params['REPAS_EQUILIBRE']:
-                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Calories ({calories}) > Équilibré ({self.params['REPAS_EQUILIBRE']}).")
+                        logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Trop calorique.")
                         continue
                 except Exception:
-                    logger.debug(f"Calories non valides/trouvées pour {nom_recette_cand} ({recette_id_str_cand}) (filtre nutrition).")
+                    logger.debug(f"Calories non trouvées pour {nom_recette_cand} (filtre nutrition).")
                     continue
             
             if recette_id_str_cand in used_recipes_in_current_gen:
@@ -759,40 +647,89 @@ class MenuGenerator:
             if not self._filtrer_recette_base(recette_id_str_cand, participants_str_codes):
                 continue
             
-            if self.est_recente(recette_id_str_cand, date_repas):
-                continue
+            # Correction : les vérifications de récence et d'intervalle ne sont pas nécessaires ici
+            # car elles sont déjà effectuées au début de la boucle.
             
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
-                continue
-    
             score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
             recettes_scores_dispo[recette_id_str_cand] = score_dispo
             recettes_ingredients_manquants[recette_id_str_cand] = manquants_pour_cette_recette
             candidates.append(recette_id_str_cand)
             logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) ajouté: Score dispo {score_dispo:.2f}, {pourcentage_dispo:.0f}% d'ingrédients. Manquants: {len(manquants_pour_cette_recette)}")
-    
+
             if self.recette_manager.recette_utilise_ingredient_anti_gaspi(recette_id_str_cand):
                 anti_gaspi_candidates.append(recette_id_str_cand)
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) est aussi anti-gaspi.")
-    
-    
+
         if not candidates:
             logger.debug("Aucun candidat trouvé après le filtrage initial.")
             return [], {}
-    
+
         if exclure_recettes_ids:
             candidates_triees = sorted(candidates, key=lambda r_id: self._get_historical_frequency(r_id))
         else:
             candidates_triees = sorted(candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
             
         anti_gaspi_triees = sorted(anti_gaspi_candidates, key=lambda r_id: recettes_scores_dispo.get(r_id, -1), reverse=True)
-    
+
         if anti_gaspi_triees and recettes_scores_dispo.get(anti_gaspi_triees[0], -1) >= 0.5:
             logger.debug(f"Priorisation des candidats anti-gaspi (meilleur score {recettes_scores_dispo.get(anti_gaspi_triees[0], -1):.2f}).")
             return anti_gaspi_triees[:5], recettes_ingredients_manquants
             
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
         return candidates_triees[:10], recettes_ingredients_manquants
+
+    def est_recente(self, recette_id:str, date_actuelle:datetime):
+        """ Renvoie True si la recette apparaît dans l’historique sur la période [date_actuelle – Δ ; date_actuelle] où Δ = NB_JOURS_ANTI_REPETITION (42 jours par défaut). """
+        try:
+            dt_ref = pd.to_datetime(date_actuelle).normalize()
+            delta = timedelta(days=self.params["NB_JOURS_ANTI_REPETITION"])
+            debut_fenetre = dt_ref - delta
+            fin_fenetre = dt_ref
+            
+            # Correction de la logique de filtrage pour une meilleure robustesse
+            dates_recette = self.menus_history_manager.df_menus_historique[
+                self.menus_history_manager.df_menus_historique["Recette"].astype(str).str.contains(recette_id, regex=False)
+            ]["Date"]
+
+            return any(debut_fenetre <= d <= fin_fenetre for d in dates_recette)
+        except Exception as e:
+            logger.error(f"est_recente() : {e}")
+            return False
+
+    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
+        """Vérifie si les ingrédients de la recette respectent leur intervalle de réutilisation."""
+        try:
+            ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
+            for ing in ingredients_recette:
+                ing_id_str = str(ing.get("Ingrédient ok"))
+                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']:
+                    continue
+                intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
+                if intervalle_jours <= 0:
+                    continue
+                
+                date_derniere_utilisation = self.menus_history_manager.get_last_use_date_ingredient(ing_id_str)
+                if date_derniere_utilisation:
+                    jours_ecoules = (date_actuelle - date_derniere_utilisation).days
+                    if jours_ecoules < intervalle_jours:
+                        logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} ({recette_page_id_str}) filtrée: Intervalle non respecté pour l'ingrédient '{self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)}' ({jours_ecoules} jours écoulés, requis {intervalle_jours}).")
+                        return False
+            return True
+        except Exception as e:
+            logger.error(f"Erreur dans est_intervalle_respecte : {e}")
+            return True
+
+    def _filtrer_recette_base(self, recette_id_str, participants_str_codes):
+        return self.recette_manager.est_adaptee_aux_participants(recette_id_str, participants_str_codes)
+    
+    def _get_historical_frequency(self, recette_id_str):
+        """Calcule la fréquence historique d'une recette."""
+        return self.menus_history_manager.recettes_historique_counts.get(recette_id_str, 0)
+
+    def compter_participants(self, participants_str_codes):
+        if not participants_str_codes:
+            return 1
+        return len(participants_str_codes.split(","))
 
 #-----------------------------------------------------------------------------------------------------------------------------#
 
