@@ -196,17 +196,6 @@ def extract_ingr_rec():
             ])
     return pd.DataFrame(rows,columns=HDR_IR)
 
-def to_excel(df):
-    """
-    Convertit un DataFrame pandas en un objet Excel.
-    """
-    from io import BytesIO
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='DonnéesMenus')
-    processed_data = output.getvalue()
-    return processed_data
-
 # ────── FIN DES FONCTIONS D'EXTRACTION ───────────────────────────
 
 def verifier_colonnes(df, colonnes_attendues, nom_fichier=""):
@@ -1386,22 +1375,6 @@ def load_notion_data(saison_filtre_selection):
         "Ingredients": df_ingredients,
         "Ingredients_recettes": df_ingredients_recettes
     }
-
-st.write("---") # Pour une meilleure séparation visuelle
-
-# Extraire les menus de Notion dans un DataFrame
-df_menus = extract_menus()
-
-if not df_menus.empty:
-    csv = df_menus.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Télécharger l'historique des menus",
-        data=csv,
-        file_name='historique_menus.csv',
-        mime='text/csv',
-    )
-else:
-    st.warning("Aucune donnée de menu à télécharger.")
 
 def main():
     st.set_page_config(layout="wide", page_title="Générateur de Menus et Liste de Courses")
