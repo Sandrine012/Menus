@@ -654,10 +654,10 @@ class MenuGenerator:
     nutrition_req,
     exclure_recettes_ids=None,
     ingredients_utilises_cette_semaine=None):
-    if exclure_recettes_ids is None:
-        exclure_recettes_ids = set()
-    if ingredients_utilises_cette_semaine is None:
-        ingredients_utilises_cette_semaine = {}
+        if exclure_recettes_ids is None:
+            exclure_recettes_ids = set()
+        if ingredients_utilises_cette_semaine is None:
+            ingredients_utilises_cette_semaine = {}
 
     candidates = []
     anti_gaspi_candidates = []
