@@ -722,7 +722,7 @@ class MenuGenerator:
             if self.est_recente(recette_id_str_cand, date_repas):
                 continue
             
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas,ingredients_dates_utilises):
+            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas,ingredients_utilises_cette_semaine):
                 continue
 
             score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
@@ -754,12 +754,12 @@ class MenuGenerator:
         logger.debug(f"Retourne les {min(len(candidates_triees), 10)} meilleurs candidats.")
         return candidates_triees[:10], recettes_ingredients_manquants
 
-    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, exclure_recettes_ids=None):
+    def _traiter_menu_standard(self, date_repas, participants_str_codes, participants_count_int, used_recipes_in_current_gen_set, menu_recent_noms_list, transportable_req_str, temps_req_str, nutrition_req_str, ingredients_utilises_cette_semaine, exclure_recettes_ids=None):
         logger.debug(f"--- Traitement Repas Standard pour {date_repas.strftime('%Y-%m-%d %H:%M')} ---")
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
             transportable_req_str, temps_req_str, nutrition_req_str,
-            exclure_recettes_ids=exclure_recettes_ids
+            exclure_recettes_ids=exclure_recettes_ids,ingredients_utilises_cette_semaine=ingredients_dates_utilises
         )
         if not recettes_candidates_initiales:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
@@ -956,6 +956,7 @@ class MenuGenerator:
                 recette_choisie_id, _ = self._traiter_menu_standard(
                     date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                     menu_recent_noms, transportable_req, temps_req, nutrition_req,
+                    ingredients_dates_utilises,
                     exclure_recettes_ids=exclure_recettes_ids
                 )
 
