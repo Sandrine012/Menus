@@ -597,42 +597,64 @@ class MenuGenerator:
             logger.error(f"Erreur est_recente pour {recette_page_id_str} à {date_actuelle}: {e}")
             return False
 
-    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle):
+    def est_intervalle_respecte(self, recette_page_id_str, date_actuelle, ingredients_utilises_generation=None):
+        if ingredients_utilises_generation is None:
+            ingredients_utilises_generation = {}
+    
         try:
             ingredients_recette = self.recette_manager.get_ingredients_for_recipe(recette_page_id_str)
+    
             for ing in ingredients_recette:
                 ing_id_str = str(ing.get("Ingrédient ok"))
-                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']: continue
+                if not ing_id_str or ing_id_str.lower() in ['nan', 'none', '']:
+                    continue
+    
                 intervalle_jours = self.recette_manager.obtenir_intervalle_ingredient_par_id(ing_id_str)
                 if intervalle_jours <= 0:
                     continue
-                
+    
+                # 🔹 1. Vérifier les repas déjà choisis dans cette même génération
+                if ing_id_str in ingredients_utilises_generation:
+                    date_derniere_util = ingredients_utilises_generation[ing_id_str]
+                    if (date_actuelle - date_derniere_util).days < intervalle_jours:
+                        nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
+                        logger.debug(
+                            f"Ingrédient '{nom_ing}' déjà utilisé le {date_derniere_util.strftime('%Y-%m-%d')} "
+                            f"→ intervalle {intervalle_jours} jours non respecté."
+                        )
+                        return False
+    
+                # 🔹 2. Vérifier l’historique Notion
                 df_hist = self.menus_history_manager.df_menus_historique
-                if df_hist.empty: continue
-                
-                # Recherche des recettes utilisant cet ingrédient
+                if df_hist.empty:
+                    continue
+    
                 df_ir = self.recette_manager.df_ingredients_recettes
                 recettes_utilisant_ing = df_ir[df_ir["Ingrédient ok"].astype(str) == ing_id_str]
-                
+    
                 if not recettes_utilisant_ing.empty:
                     recette_ids_utilisant_ing = set(recettes_utilisant_ing[COLONNE_ID_RECETTE].astype(str).unique())
-                    
                     debut_intervalle = date_actuelle - timedelta(days=intervalle_jours)
-                    
-                    # Vérifie si une recette utilisant l'ingrédient a été utilisée dans l'intervalle
+    
                     mask_hist = (
                         (df_hist['Date'] >= debut_intervalle) &
                         (df_hist['Recette'].astype(str).isin(recette_ids_utilisant_ing))
                     )
-                    
+    
                     if not df_hist.loc[mask_hist].empty:
                         nom_ing = self.recette_manager.obtenir_nom_ingredient_par_id(ing_id_str)
-                        logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_page_id_str)} filtrée: L'ingrédient '{nom_ing}' a été utilisé récemment (intervalle de {intervalle_jours} jours non respecté).")
+                        logger.debug(
+                            f"Ingrédient '{nom_ing}' déjà utilisé récemment dans l’historique "
+                            f"(intervalle {intervalle_jours} jours non respecté)."
+                        )
                         return False
+    
             return True
+    
         except Exception as e:
             logger.error(f"Erreur est_intervalle_respecte pour {recette_page_id_str} à {date_actuelle}: {e}")
             return True
+
 
     def compter_participants(self, participants_str_codes):
         if not isinstance(participants_str_codes, str): return 1
@@ -700,7 +722,7 @@ class MenuGenerator:
             if self.est_recente(recette_id_str_cand, date_repas):
                 continue
             
-            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas):
+            if not self.est_intervalle_respecte(recette_id_str_cand, date_repas,ingredients_dates_utilises):
                 continue
 
             score_dispo, pourcentage_dispo, manquants_pour_cette_recette = self.recette_manager.evaluer_disponibilite_et_manquants(recette_id_str_cand, nb_personnes)
@@ -806,7 +828,7 @@ class MenuGenerator:
 
         if recette_choisie_final:
         # Vérification supplémentaire de l'intervalle des ingrédients avant validation finale
-            if not self.est_intervalle_respecte(recette_choisie_final, date_repas):
+            if not self.est_intervalle_respecte(recette_choisie_final, date_repas, ingredients_dates_utilises):
                 logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_choisie_final)} rejetée en dernière étape : intervalle ingrédient non respecté.")
                 return None, {}
             logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
@@ -894,6 +916,8 @@ class MenuGenerator:
         menu_recent_noms = []
         
         ingredients_menu_cumules = {}
+        ingredients_dates_utilises = {}  # {ingredient_id: date}
+
         
         if mode == 'alternatif':
             self.recette_manager.stock_simule = self.recette_manager.df_ingredients_initial.copy()
@@ -999,6 +1023,9 @@ class MenuGenerator:
                 for ing_id, qte_menu in ingredients_necessaires_ce_repas.items():
                     current_qte = ingredients_menu_cumules.get(ing_id, 0.0)
                     ingredients_menu_cumules[ing_id] = current_qte + qte_menu
+                    # 🔹 On enregistre aussi la date du dernier usage de cet ingrédient
+                    ingredients_dates_utilises[ing_id] = date_repas_dt
+
                 
                 if not self.ne_pas_decrementer_stock:
                     self.recette_manager.decrementer_stock(recette_choisie_id, participants_count, date_repas_dt)
