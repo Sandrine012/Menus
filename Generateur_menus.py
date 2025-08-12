@@ -972,6 +972,7 @@ class MenuGenerator:
                         recette_choisie_id, _ = self._traiter_menu_standard(
                             date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                             menu_recent_noms, transportable_req, temps_req, "normal",
+                            ingredients_dates_utilises,
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         if recette_choisie_id:
@@ -983,6 +984,7 @@ class MenuGenerator:
                         recette_choisie_id, _ = self._traiter_menu_standard(
                             date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                             menu_recent_noms, transportable_req, "normal", nutrition_req,
+                            ingredients_dates_utilises,
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         if recette_choisie_id:
@@ -994,6 +996,7 @@ class MenuGenerator:
                         recette_choisie_id, _ = self._traiter_menu_standard(
                             date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                             menu_recent_noms, "non", temps_req, nutrition_req,
+                            ingredients_dates_utilises,
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         if recette_choisie_id:
@@ -1005,6 +1008,7 @@ class MenuGenerator:
                         recette_choisie_id, _ = self._traiter_menu_standard(
                             date_repas_dt, participants_str, participants_count, used_recipes_current_generation_set,
                             menu_recent_noms, "non", "normal", "normal",
+                            ingredients_dates_utilises,
                             exclure_recettes_ids=exclure_recettes_ids
                         )
                         if recette_choisie_id:
