@@ -759,7 +759,7 @@ class MenuGenerator:
         recettes_candidates_initiales, recettes_manquants_dict = self.generer_recettes_candidates(
             date_repas, participants_str_codes, used_recipes_in_current_gen_set,
             transportable_req_str, temps_req_str, nutrition_req_str,
-            exclure_recettes_ids=exclure_recettes_ids,ingredients_utilises_cette_semaine=ingredients_dates_utilises
+            exclure_recettes_ids=exclure_recettes_ids,ingredients_utilises_cette_semaine=ingredients_utilises_cette_semaine
         )
         if not recettes_candidates_initiales:
             logger.debug(f"Aucune recette candidate initiale pour {date_repas.strftime('%Y-%m-%d %H:%M')}.")
