@@ -828,7 +828,7 @@ class MenuGenerator:
 
         if recette_choisie_final:
         # Vérification supplémentaire de l'intervalle des ingrédients avant validation finale
-            if not self.est_intervalle_respecte(recette_choisie_final, date_repas, ingredients_dates_utilises):
+            if not self.est_intervalle_respecte(recette_choisie_final, date_repas, ingredients_utilises_cette_semaine):
                 logger.debug(f"Recette {self.recette_manager.obtenir_nom(recette_choisie_final)} rejetée en dernière étape : intervalle ingrédient non respecté.")
                 return None, {}
             logger.debug(f"Recette finale sélectionnée pour repas standard: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
