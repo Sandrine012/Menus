@@ -34,6 +34,23 @@ ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
+def choisir_recette_aleatoire_ponderee(candidats, scores):
+    """
+    Choisit une recette dans la liste 'candidats' avec une probabilité proportionnelle à son score.
+    - candidats : liste d'IDs recette
+    - scores : dict {id_recette: score}
+    """
+    if not candidats:
+        return None
+    poids = [max(scores.get(r, 0), 0) for r in candidats]  # On force score >= 0
+    somme_poids = sum(poids)
+    if somme_poids == 0:
+        # Si tous les scores sont 0, on choisit totalement au hasard
+        return random.choice(candidats)
+    # Sélection pondérée selon les scores
+    return random.choices(candidats, weights=poids, k=1)[0]
+
+
 # ────── FONCTION POUR DÉTERMINER LA SAISON ACTUELLE ────────────────
 def get_current_season():
     """Détermine la saison actuelle en France."""
@@ -656,10 +673,10 @@ class MenuGenerator:
                 continue
 
             temps_total = self.recette_manager.obtenir_temps_preparation(recette_id_str_cand)
-            if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']:
+            if temps_req == "express" and temps_total > self.params['TEMPS_MAX_EXPRESS']* 1.10:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Express ({self.params['TEMPS_MAX_EXPRESS']} min).")
                 continue
-            if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']:
+            if temps_req == "rapide" and temps_total > self.params['TEMPS_MAX_RAPIDE']* 1.10:
                 logger.debug(f"Candidat {nom_recette_cand} ({recette_id_str_cand}) filtré: Temps ({temps_total} min) > Rapide ({self.params['TEMPS_MAX_RAPIDE']} min).")
                 continue
 
@@ -759,10 +776,10 @@ class MenuGenerator:
                     logger.debug(f"Candidat préféré {self.recette_manager.obtenir_nom(r_id)} ({r_id}) filtré: Premier mot '{first_word}' déjà récent.")
 
             if preferred_valides_motcle:
-                recette_choisie_final = sorted(preferred_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                recette_choisie_final = choisir_recette_aleatoire_ponderee(preferred_valides_motcle, scores_candidats_dispo)
                 logger.debug(f"Recette choisie parmi les préférées valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             else:
-                recette_choisie_final = sorted(preferred_candidates_list, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                recette_choisie_final = choisir_recette_aleatoire_ponderee(preferred_candidates_list, scores_candidats_dispo)
                 logger.debug(f"Recette choisie parmi les préférées (sans filtrage mot-clé, car tous sont filtrés): {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
 
         if not recette_choisie_final:
@@ -778,7 +795,7 @@ class MenuGenerator:
                 if exclure_recettes_ids:
                     recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: self._get_historical_frequency(r_id))[0]
                 else:
-                    recette_choisie_final = sorted(candidates_valides_motcle, key=lambda r_id: scores_candidats_dispo.get(r_id, -1), reverse=True)[0]
+                    recette_choisie_final = choisir_recette_aleatoire_ponderee(candidates_valides_motcle, scores_candidats_dispo)
                 logger.debug(f"Recette choisie parmi les candidats généraux valides: {self.recette_manager.obtenir_nom(recette_choisie_final)} ({recette_choisie_final}).")
             elif recettes_candidates_initiales:
                 if exclure_recettes_ids:
