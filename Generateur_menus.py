@@ -945,7 +945,7 @@ class MenuGenerator:
             remarques_repas = ""
             temps_prep_final = 0
             
-            if participants_str == "B":
+            if "B" in [p.strip() for p in participants_str.split(",")]:
                 nom_plat_final, recette_choisie_id, remarques_repas = self.generer_menu_repas_b(
                     date_repas_dt, plats_transportables_semaine, repas_b_utilises_ids, menu_recent_noms
                 )
