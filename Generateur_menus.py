@@ -1104,7 +1104,8 @@ def add_menu_to_notion(df_menu, notion_db_id):
             continue
             
         try:
-            date_notion = datetime.strptime(date_str.split(' ')[0], '%Y-%m-%d').date().isoformat()
+            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M')
+            date_notion = dt.isoformat() + "Z"          # → '2025-08-30T12:00:00Z'
         except ValueError:
             st.warning(f"Date invalide pour la ligne : {date_str}. L'enregistrement sera ignoré.")
             failure_count += 1
