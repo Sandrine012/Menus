@@ -77,10 +77,11 @@ def paginate(db_id, **kwargs):
                 "page_size": BATCH_SIZE,
                 **kwargs
             }
-            resp = notion.request(
-                path=f"/v1/data_sources/{ID_MENUS}/query",
-                method="POST",
-                body=data
+            resp = notion.databases.query(
+                database_id=db_id,
+                start_cursor=cur,
+                page_size=BATCH_SIZE,
+                **kwargs
             )
             out.extend(resp["results"])
             if not resp["has_more"]:
