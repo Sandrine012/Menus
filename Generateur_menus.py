@@ -78,7 +78,7 @@ def paginate(db_id, **kwargs):
                 **kwargs
             }
             resp = notion.request(
-                path=f"/data_sources/{ID_MENUS}/query",
+                path=f"data_sources/{ID_MENUS}/query",
                 method="POST",
                 body=data
             )
