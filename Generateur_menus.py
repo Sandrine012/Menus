@@ -80,7 +80,7 @@ def paginate(db_id, **kwargs):
             resp = notion.request(
                 path=f"v1/data_sources/{ID_MENUS}/query",
                 method="POST",
-                json=data
+                body=data
             )
             out.extend(resp["results"])
             if not resp["has_more"]:
