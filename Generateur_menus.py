@@ -27,10 +27,10 @@ COLONNE_AIME_PAS_PRINCIP = "Aime_pas_princip"
 
 # ────── AJOUT DES DÉPENDANCES NOTION ───────────────────────────
 NOTION_API_KEY = st.secrets["notion_api_key"]
-ID_RECETTES = st.secrets["notion_source_id_recettes"]
-ID_MENUS = st.secrets["notion_source_id_menus"]
-ID_INGREDIENTS = st.secrets["notion_source_id_ingredients"]
-ID_INGREDIENTS_RECETTES = st.secrets["notion_source_id_ingredients_recettes"]
+ID_RECETTES = st.secrets["notion_database_id_recettes"]
+ID_MENUS = st.secrets["notion_database_id_menus"]
+ID_INGREDIENTS = st.secrets["notion_database_id_ingredients"]
+ID_INGREDIENTS_RECETTES = st.secrets["notion_database_id_ingredients_recettes"]
 BATCH_SIZE, MAX_RETRY, WAIT_S = 50, 3, 5
 notion = Client(auth=NOTION_API_KEY)
 
@@ -72,17 +72,10 @@ def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
         try:
-            data = {
-                "start_cursor": cur,
-                "page_size": BATCH_SIZE,
-                **kwargs
-            }
-            resp = notion.databases.query(
-                database_id=db_id,
-                start_cursor=cur,
-                page_size=BATCH_SIZE,
-                **kwargs
-            )
+            resp = notion.databases.query(database_id=db_id,
+                                          start_cursor=cur,
+                                          page_size=BATCH_SIZE,
+                                          **kwargs)
             out.extend(resp["results"])
             if not resp["has_more"]:
                 break
