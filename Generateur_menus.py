@@ -72,7 +72,7 @@ def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
         try:
-            resp = notion.databases.query(database_id=db_id,
+            resp = notion_client.data_sources.query(data_source_id=ID_MENUS,
                                           start_cursor=cur,
                                           page_size=BATCH_SIZE,
                                           **kwargs)
