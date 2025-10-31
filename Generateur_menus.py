@@ -72,12 +72,13 @@ def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
         try:
-            resp = notion.data_sources.query(
-                data_source_id=db_id,
+            resp = notion.databases.query(
+                database_id=db_id,
                 start_cursor=cur,
                 page_size=BATCH_SIZE,
                 **kwargs
             )
+
             out.extend(resp["results"])
             if not resp["has_more"]:
                 break
