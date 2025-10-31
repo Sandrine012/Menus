@@ -72,13 +72,13 @@ def paginate(db_id, **kwargs):
     out, cur, retry = [], None, 0
     while True:
         try:
-            resp = notion.databases.query(
+            # Utiliser query_database au lieu de databases.query
+            resp = notion.databases.query_database(
                 database_id=db_id,
                 start_cursor=cur,
                 page_size=BATCH_SIZE,
                 **kwargs
             )
-
             out.extend(resp["results"])
             if not resp["has_more"]:
                 break
@@ -94,8 +94,25 @@ def paginate(db_id, **kwargs):
         except APIResponseError as e:
             st.error(f"Erreur API : {e}")
             break
+        except AttributeError as e:
+            # Fallback pour les anciennes versions
+            try:
+                resp = notion.databases.query(
+                    database_id=db_id,
+                    start_cursor=cur,
+                    page_size=BATCH_SIZE,
+                    **kwargs
+                )
+                out.extend(resp["results"])
+                if not resp["has_more"]:
+                    break
+                cur = resp["next_cursor"]
+                time.sleep(0.3)
+                retry = 0
+            except Exception as e2:
+                st.error(f"Erreur lors de la pagination : {e2}")
+                break
     return out
-
 HDR_RECETTES = ["Page_ID","Nom","ID_Recette","Saison",
                 "Calories","Proteines","Temps_total",
                 "Aime_pas_princip","Type_plat","Transportable"]
