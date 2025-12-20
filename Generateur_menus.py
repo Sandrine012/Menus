@@ -1264,34 +1264,25 @@ def main():
 
     st.sidebar.header("Fichiers de données")
     
-    st.sidebar.info("Veuillez charger le fichier CSV pour le planning.")
-    
-    uploaded_files = {}
-    uploaded_files["Planning.csv"] = st.sidebar.file_uploader(
-        "Uploader Planning.csv (votre planning de repas)", 
-        type="csv", 
-        key="Planning.csv"
-    )
-
-    if uploaded_files["Planning.csv"] is None:
-        st.warning("Veuillez charger le fichier CSV de planning pour continuer.")
-        return
+    # LIEN : Dans Sheets > Fichier > Partager > Publier sur le web (Onglet 'Planning (export)' en format CSV)
+    URL_GSHEET = "https://docs.google.com/spreadsheets/d/1iZURN7_84UWseGz2HGhnugTfqNe7oVqTl4s5Ahhd4Eo/edit?usp=sharing"
 
     dataframes = {}
 
-    try:
-        uploaded_files["Planning.csv"].seek(0)
-        df_planning = pd.read_csv(
-            uploaded_files["Planning.csv"],
-            encoding='utf-8',
-            sep=';',
-            parse_dates=['Date'],
-            dayfirst=True
-        )
-        dataframes["Planning"] = df_planning
-        st.sidebar.success("Planning.csv chargé avec succès.")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors du chargement de Planning.csv: {e}")
+    if st.sidebar.button("🔄 Actualiser Planning via Google Sheets", use_container_width=True):
+        try:
+            # Google publie avec des virgules par défaut
+            df_planning = pd.read_csv(URL_GSHEET, sep=',', parse_dates=['Date'], dayfirst=True)
+            st.session_state['df_planning_auto'] = df_planning
+            st.sidebar.success("Planning chargé depuis Google Sheets !")
+        except Exception as e:
+            st.sidebar.error(f"Erreur de connexion : {e}")
+
+    # Vérification et assignation pour la suite du script
+    if 'df_planning_auto' in st.session_state:
+        dataframes["Planning"] = st.session_state['df_planning_auto']
+    else:
+        st.warning("Veuillez cliquer sur le bouton dans la barre latérale pour charger le planning.")
         return
 
     if 'generation_reussie' not in st.session_state:
