@@ -1265,7 +1265,7 @@ def main():
     st.sidebar.header("Fichiers de données")
     
     # LIEN : Dans Sheets > Fichier > Partager > Publier sur le web (Onglet 'Planning (export)' en format CSV)
-    URL_GSHEET = "https://docs.google.com/spreadsheets/d/1iZURN7_84UWseGz2HGhnugTfqNe7oVqTl4s5Ahhd4Eo/edit?usp=sharing"
+    URL_GSHEET = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT7aGdwm_Hz9rVtiSLAx5mZ1dRYbhbOZfUkaiTifBiRNd4JBhCq1a71JAghcfmgKTSCXJyI96LuvBWC/pub?gid=170992278&single=true&output=csv"
 
     dataframes = {}
 
